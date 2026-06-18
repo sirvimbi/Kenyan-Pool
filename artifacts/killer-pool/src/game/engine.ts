@@ -1,0 +1,1083 @@
+import * as THREE from 'three';
+import {
+  BallState, PlayerConfig, PlayerState, Vec2, ShotResult, HUDState, GamePhase,
+  TABLE_W, TABLE_L, BALL_R, CUSHION, CUSHION_POSITIONS, BALL_SEQUENCE, BALL_COLORS,
+  BALL_VALUES, STARTING_BALANCE, TURN_DURATION, HW, HL
+} from './types';
+import { stepPhysics, allStopped, shotVelocity } from './physics';
+import {
+  createPlayers, getNextTarget, evaluateShot, applyResult,
+  updateBench, getWinners, calcPayout
+} from './rules';
+import { computeAIShot } from './ai';
+
+const CUE_LEN   = 145;
+const TABLE_TH  = 8;   // table frame thickness (top)
+const LEG_H     = 78;  // legs drop below Y=0
+
+type EventHandler = (data?: unknown) => void;
+
+// ─────────────────────────────────────────────
+//  Ball texture generator
+// ─────────────────────────────────────────────
+function makeBallTexture(num: number): THREE.CanvasTexture {
+  const W = 512, H = 512;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d')!;
+  const isStripe = num >= 9;
+  const col = BALL_COLORS[num] || '#ffffff';
+
+  // Base
+  if (num === 0) {
+    ctx.fillStyle = '#F0EEE8';
+    ctx.fillRect(0, 0, W, H);
+    // subtle ivory gradient
+    const g = ctx.createRadialGradient(W*0.4, H*0.35, 0, W/2, H/2, W/2);
+    g.addColorStop(0, 'rgba(255,255,255,0.9)');
+    g.addColorStop(1, 'rgba(200,195,180,0.3)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  } else if (isStripe) {
+    ctx.fillStyle = '#F0EEE8'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = col;
+    ctx.fillRect(0, H*0.27, W, H*0.46);
+    // Edge fade
+    const gTop = ctx.createLinearGradient(0, H*0.27, 0, H*0.37);
+    gTop.addColorStop(0, 'rgba(255,255,255,0.6)');
+    gTop.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gTop; ctx.fillRect(0, H*0.27, W, H*0.1);
+    const gBot = ctx.createLinearGradient(0, H*0.63, 0, H*0.73);
+    gBot.addColorStop(0, 'rgba(255,255,255,0)');
+    gBot.addColorStop(1, 'rgba(255,255,255,0.6)');
+    ctx.fillStyle = gBot; ctx.fillRect(0, H*0.63, W, H*0.1);
+  } else {
+    ctx.fillStyle = col; ctx.fillRect(0, 0, W, H);
+    // subtle gradient to add depth
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, 'rgba(255,255,255,0.18)');
+    g.addColorStop(0.5, 'rgba(255,255,255,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.25)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+
+  // Number circles
+  if (num > 0) {
+    for (const cx of [W * 0.25, W * 0.75]) {
+      ctx.beginPath();
+      ctx.arc(cx, H / 2, W * 0.15, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.93)';
+      ctx.fill();
+      ctx.fillStyle = '#1a1a1a';
+      ctx.font = `bold ${Math.round(W * 0.14)}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(num), cx, H / 2 + 2);
+    }
+  }
+
+  // Gloss highlight
+  const gloss = ctx.createRadialGradient(W*0.38, H*0.32, 0, W*0.38, H*0.32, W*0.28);
+  gloss.addColorStop(0, 'rgba(255,255,255,0.55)');
+  gloss.addColorStop(0.5, 'rgba(255,255,255,0.1)');
+  gloss.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = gloss;
+  ctx.fillRect(0, 0, W, H);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// ─────────────────────────────────────────────
+//  Wood + felt texture generators
+// ─────────────────────────────────────────────
+function makeWoodTexture(): THREE.CanvasTexture {
+  const W = 512, H = 512;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#3A1F0A'; ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 60; i++) {
+    const x = (i / 60) * W + (Math.random()-0.5)*6;
+    ctx.strokeStyle = `rgba(${50+Math.random()*30},${25+Math.random()*15},${5+Math.random()*5},0.3)`;
+    ctx.lineWidth = 2 + Math.random() * 4;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + (Math.random()-0.5)*20, H); ctx.stroke();
+  }
+  const g = ctx.createLinearGradient(0,0,W,0);
+  g.addColorStop(0,'rgba(80,40,10,0.2)'); g.addColorStop(0.5,'rgba(255,200,100,0.08)'); g.addColorStop(1,'rgba(0,0,0,0.3)');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(3,1);
+  return t;
+}
+
+function makeFeltTexture(): THREE.CanvasTexture {
+  const W = 256, H = 256;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#1B5E30'; ctx.fillRect(0,0,W,H);
+  for (let i=0; i<2000; i++) {
+    ctx.fillStyle = `rgba(${Math.random()>0.5?60:20},${Math.random()>0.5?120:80},${Math.random()>0.5?50:30},0.15)`;
+    ctx.fillRect(Math.random()*W, Math.random()*H, 1.5, 1.5);
+  }
+  const g = ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,W/2);
+  g.addColorStop(0,'rgba(255,255,255,0.04)'); g.addColorStop(1,'rgba(0,0,0,0.15)');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(4,8);
+  return t;
+}
+
+function makeFloorTexture(): THREE.CanvasTexture {
+  const W = 512, H = 512;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d')!;
+  ctx.fillStyle = '#1C1008'; ctx.fillRect(0,0,W,H);
+  const cols = 8, rows = 16;
+  const tw = W/cols, th = H/rows;
+  for (let r=0; r<rows; r++) {
+    for (let col=0; col<cols; col++) {
+      const even = (r+col)%2===0;
+      const x = col*tw, y = r*th;
+      ctx.fillStyle = even ? '#231508' : '#1A100A';
+      ctx.fillRect(x+1, y+1, tw-2, th-2);
+      ctx.strokeStyle = 'rgba(100,60,20,0.15)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x+1, y+1, tw-2, th-2);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6,6);
+  return t;
+}
+
+function makeSkylineTexture(): THREE.CanvasTexture {
+  const W = 1024, H = 512;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d')!;
+  // Night sky gradient
+  const sky = ctx.createLinearGradient(0,0,0,H);
+  sky.addColorStop(0,'#050215'); sky.addColorStop(0.6,'#0D0520'); sky.addColorStop(1,'#1A0A30');
+  ctx.fillStyle = sky; ctx.fillRect(0,0,W,H);
+  // Stars
+  for (let i=0;i<200;i++) {
+    const sz = Math.random()*1.5;
+    ctx.fillStyle = `rgba(255,255,255,${0.3+Math.random()*0.7})`;
+    ctx.fillRect(Math.random()*W, Math.random()*H*0.6, sz, sz);
+  }
+  // Buildings silhouette
+  const buildings: {x:number,w:number,h:number,windows:{x:number,y:number,lit:boolean}[]}[] = [];
+  let bx = 0;
+  while (bx < W) {
+    const bw = 30 + Math.random()*60;
+    const bh = 60 + Math.random()*(H*0.55);
+    const wins: {x:number,y:number,lit:boolean}[] = [];
+    for (let wy=H-bh+5; wy<H-8; wy+=14) {
+      for (let wx=bx+4; wx<bx+bw-4; wx+=10) {
+        wins.push({x:wx, y:wy, lit: Math.random()<0.6});
+      }
+    }
+    buildings.push({x:bx, w:bw, h:bh, windows:wins});
+    bx += bw + Math.random()*8;
+  }
+  for (const b of buildings) {
+    ctx.fillStyle = '#080415';
+    ctx.fillRect(b.x, H-b.h, b.w, b.h);
+    for (const w of b.windows) {
+      if (w.lit) {
+        ctx.fillStyle = Math.random()>0.7
+          ? `rgba(255,${160+Math.random()*80},0,${0.7+Math.random()*0.3})`
+          : `rgba(200,210,255,${0.5+Math.random()*0.5})`;
+        ctx.fillRect(w.x, w.y, 6, 8);
+      }
+    }
+  }
+  // Neon reflections on glass
+  const neonCols = ['rgba(0,255,100,0.08)','rgba(255,50,150,0.08)','rgba(0,150,255,0.06)'];
+  for (const nc of neonCols) {
+    ctx.fillStyle = nc;
+    ctx.fillRect(0, H*0.85, W, H*0.15);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// ─────────────────────────────────────────────
+//  GameEngine class
+// ─────────────────────────────────────────────
+export class GameEngine {
+  private renderer!: THREE.WebGLRenderer;
+  private scene!: THREE.Scene;
+  private camera!: THREE.PerspectiveCamera;
+  private canvas!: HTMLCanvasElement;
+  private raycaster = new THREE.Raycaster();
+  private tablePlane = new THREE.Plane(new THREE.Vector3(0,1,0), -BALL_R);
+
+  private ballMeshes = new Map<number, THREE.Mesh>();
+  private cueGroup!: THREE.Group;
+  private cueMesh!: THREE.Mesh;
+  private cueGhostLine!: THREE.Line;
+  private tableGroup!: THREE.Group;
+
+  private balls: BallState[] = [];
+  private players: PlayerState[] = [];
+  private currentPlayerIndex = 0;
+  private targetBall = 3;
+  private phase: GamePhase = 'aiming';
+  private timeLeft = TURN_DURATION;
+  private lastTimerTick = 0;
+  private prizePool = 0;
+  private stake = 100;
+
+  private aimAngle = 0;   // radians, in XZ plane
+  private power = 0;
+  private isPowering = false;
+  private powerStart = 0;
+  private mousePos = new THREE.Vector2();
+
+  private firstHit: number | null = null;
+  private pottedInShot: number[] = [];
+  private cuePottedInShot = false;
+  private shotResult: ShotResult | null = null;
+
+  private camMode: 'overhead'|'cinematic'|'aim' = 'overhead';
+  private camTargetPos = new THREE.Vector3();
+  private camTargetLook = new THREE.Vector3();
+
+  private rafId = 0;
+  private lastTime = 0;
+
+  private events = new Map<string, EventHandler[]>();
+  private aiThinkTimeout: ReturnType<typeof setTimeout> | null = null;
+  private evalTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  // ── init ──
+  init(canvas: HTMLCanvasElement) {
+    this.canvas = canvas;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference:'high-performance' });
+    this.renderer.setSize(w, h, false);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x060410);
+    this.scene.fog = new THREE.FogExp2(0x060410, 0.0012);
+
+    this.camera = new THREE.PerspectiveCamera(58, w/h, 0.5, 4000);
+    this.camera.position.set(0, 280, 90);
+    this.camera.lookAt(0, 0, 0);
+
+    this.setupLights();
+    this.buildRoom();
+    this.buildTable();
+
+    canvas.addEventListener('mousemove', this.onMouseMove);
+    canvas.addEventListener('mousedown', this.onMouseDown);
+    canvas.addEventListener('mouseup',   this.onMouseUp);
+    window.addEventListener('resize',    this.onResize);
+
+    this.gameLoop(0);
+  }
+
+  startGame(configs: PlayerConfig[], stake: number) {
+    this.stake = stake;
+    this.prizePool = Math.floor(stake * configs.length * 0.9);
+    this.players = createPlayers(configs, stake);
+    this.currentPlayerIndex = 0;
+    this.targetBall = 3;
+    this.phase = 'aiming';
+    this.timeLeft = TURN_DURATION;
+    this.lastTimerTick = performance.now();
+    this.shotResult = null;
+
+    // Reset balls
+    this.balls = [
+      { number: 0, pos: { x: 0, z: -60 }, vel: { x:0, z:0 }, isPotted: false }
+    ];
+    for (const n of BALL_SEQUENCE) {
+      const [x, z] = CUSHION_POSITIONS[n];
+      this.balls.push({ number: n, pos: { x, z }, vel: { x:0, z:0 }, isPotted: false });
+    }
+
+    this.buildBalls();
+    this.buildCue();
+    this.setCam('overhead', true);
+    this.emitHUD();
+  }
+
+  // ── scene building ──
+  private setupLights() {
+    // Very dim ambient
+    const amb = new THREE.AmbientLight(0x1a0f2e, 0.5);
+    this.scene.add(amb);
+
+    // Hemisphere light for gentle fill
+    const hemi = new THREE.HemisphereLight(0x2a1a4a, 0x0a0508, 0.4);
+    this.scene.add(hemi);
+
+    // 3 pendant spotlights over the table
+    const pendantCols = [0xFFF5DC, 0xFFEEC0, 0xFFF0CC];
+    const pendantX = [-40, 0, 40];
+    for (let i=0; i<3; i++) {
+      const spot = new THREE.SpotLight(pendantCols[i], 120, 500, Math.PI/5, 0.4, 1.5);
+      spot.position.set(pendantX[i], 190, 0);
+      spot.target.position.set(pendantX[i], 0, 0);
+      spot.castShadow = true;
+      spot.shadow.mapSize.set(1024, 1024);
+      spot.shadow.camera.near = 10;
+      spot.shadow.camera.far = 400;
+      this.scene.add(spot, spot.target);
+
+      // Pendant light body
+      const pendGeo = new THREE.CylinderGeometry(1.5, 7, 12, 8);
+      const pendMat = new THREE.MeshStandardMaterial({ color:0x1a1a1a, roughness:0.5, metalness:0.8 });
+      const pend = new THREE.Mesh(pendGeo, pendMat);
+      pend.position.set(pendantX[i], 196, 0);
+      this.scene.add(pend);
+
+      // Cord
+      const cord = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.2,0.2,100,4),
+        new THREE.MeshStandardMaterial({ color:0x111111 })
+      );
+      cord.position.set(pendantX[i], 246, 0);
+      this.scene.add(cord);
+    }
+
+    // Neon sign fill lights
+    const neonLights = [
+      { color:0x00FF88, pos:new THREE.Vector3(-280, 80, -200), intensity: 3 },
+      { color:0xFF2090, pos:new THREE.Vector3(280, 100, -200), intensity: 3 },
+      { color:0x4488FF, pos:new THREE.Vector3(0, 80, 260), intensity: 2 },
+    ];
+    for (const n of neonLights) {
+      const pl = new THREE.PointLight(n.color, n.intensity, 300, 2);
+      pl.position.copy(n.pos);
+      this.scene.add(pl);
+    }
+  }
+
+  private buildRoom() {
+    const room = new THREE.Group();
+
+    // Floor
+    const floorTex = makeFloorTexture();
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(900, 900),
+      new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.85, metalness: 0.05 })
+    );
+    floor.rotation.x = -Math.PI/2;
+    floor.position.y = -LEG_H - TABLE_TH;
+    floor.receiveShadow = true;
+    room.add(floor);
+
+    // Ceiling
+    const ceiling = new THREE.Mesh(
+      new THREE.PlaneGeometry(900, 900),
+      new THREE.MeshStandardMaterial({ color: 0x0A0610, roughness:1 })
+    );
+    ceiling.rotation.x = Math.PI/2;
+    ceiling.position.y = 330;
+    room.add(ceiling);
+
+    // Back wall (north, Z-)
+    const wallMat = new THREE.MeshStandardMaterial({ color:0x0F0C1A, roughness:0.9 });
+    const bwall = new THREE.Mesh(new THREE.PlaneGeometry(900,420), wallMat.clone());
+    bwall.position.set(0, 120, -420);
+    room.add(bwall);
+
+    // Front wall (Z+) with bar counter
+    const fwall = new THREE.Mesh(new THREE.PlaneGeometry(900,420), wallMat.clone());
+    fwall.rotation.y = Math.PI;
+    fwall.position.set(0, 120, 420);
+    room.add(fwall);
+
+    // Left wall (X-)
+    const lwall = new THREE.Mesh(new THREE.PlaneGeometry(900,420), wallMat.clone());
+    lwall.rotation.y = Math.PI/2;
+    lwall.position.set(-420, 120, 0);
+    room.add(lwall);
+
+    // Right wall (X+)
+    const rwall = new THREE.Mesh(new THREE.PlaneGeometry(900,420), wallMat.clone());
+    rwall.rotation.y = -Math.PI/2;
+    rwall.position.set(420, 120, 0);
+    room.add(rwall);
+
+    // Big window on back wall — Nairobi skyline
+    const skyTex = makeSkylineTexture();
+    const window3d = new THREE.Mesh(
+      new THREE.PlaneGeometry(340, 180),
+      new THREE.MeshBasicMaterial({ map: skyTex })
+    );
+    window3d.position.set(0, 120, -419);
+    room.add(window3d);
+
+    // Window frame
+    const frameMat = new THREE.MeshStandardMaterial({ color:0x1A1010, roughness:0.5, metalness:0.5 });
+    const frameH = new THREE.Mesh(new THREE.BoxGeometry(360, 6, 4), frameMat);
+    frameH.position.set(0, 213, -418); room.add(frameH);
+    const frameH2 = frameH.clone(); frameH2.position.y = 30; room.add(frameH2);
+    const frameV = new THREE.Mesh(new THREE.BoxGeometry(6, 186, 4), frameMat);
+    frameV.position.set(-183, 122, -418); room.add(frameV);
+    const frameV2 = frameV.clone(); frameV2.position.x = 183; room.add(frameV2);
+
+    // Neon signs
+    this.addNeonSign(room, 'KILLER POOL', -180, 170, -415, 0x00FF88, 1.2);
+    this.addNeonSign(room, 'NAIROBI NIGHTS', 160, 160, -415, 0xFF2090, 0.9);
+    this.addNeonSign(room, 'BILLIARDS', -350, 100, -80, 0x44AAFF, 1.0, Math.PI/2);
+
+    // Bar counter (front)
+    const barTop = new THREE.Mesh(
+      new THREE.BoxGeometry(300, 6, 50),
+      new THREE.MeshStandardMaterial({ color:0x1A0A04, roughness:0.3, metalness:0.1 })
+    );
+    barTop.position.set(0, -20, 380);
+    room.add(barTop);
+    const barFront = new THREE.Mesh(
+      new THREE.BoxGeometry(300, 60, 8),
+      new THREE.MeshStandardMaterial({ color:0x0F0602, roughness:0.6 })
+    );
+    barFront.position.set(0, -53, 359);
+    room.add(barFront);
+
+    // Stools
+    for (let sx=-2; sx<=2; sx++) {
+      const stool = new THREE.Group();
+      const seat = new THREE.Mesh(new THREE.CylinderGeometry(8,8,3,12),
+        new THREE.MeshStandardMaterial({ color:0x1A0808, roughness:0.4 }));
+      seat.position.y = 3; stool.add(seat);
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(1.5,1.5,40,8),
+        new THREE.MeshStandardMaterial({ color:0x2A1A0A, roughness:0.3, metalness:0.6 }));
+      leg.position.y = -17; stool.add(leg);
+      stool.position.set(sx*55, -58, 350);
+      room.add(stool);
+    }
+
+    this.scene.add(room);
+  }
+
+  private addNeonSign(
+    parent: THREE.Group, text: string,
+    x: number, y: number, z: number,
+    color: number, scale = 1, rotY = 0
+  ) {
+    const W = Math.max(120, text.length * 18) * scale;
+    const H = 28 * scale;
+    const c = document.createElement('canvas');
+    c.width = 1024; c.height = 128;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = 'transparent';
+    ctx.clearRect(0,0,1024,128);
+    const hex = '#'+color.toString(16).padStart(6,'0');
+    ctx.shadowColor = hex;
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = hex;
+    ctx.font = `bold ${70*scale}px 'Bebas Neue', Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 512, 64);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, H), mat);
+    mesh.position.set(x, y, z);
+    if (rotY) mesh.rotation.y = rotY;
+    parent.add(mesh);
+  }
+
+  private buildTable() {
+    this.tableGroup = new THREE.Group();
+    const woodTex = makeWoodTexture();
+    const feltTex = makeFeltTexture();
+
+    const woodMat = new THREE.MeshStandardMaterial({
+      map: woodTex, roughness: 0.4, metalness: 0.05, color: 0x5C2800
+    });
+    const feltMat = new THREE.MeshStandardMaterial({
+      map: feltTex, roughness: 0.9, metalness: 0.0, color: 0x1B6535
+    });
+    const cushMat = new THREE.MeshStandardMaterial({
+      color: 0x165028, roughness: 0.85
+    });
+    const rubberMat = new THREE.MeshStandardMaterial({
+      color: 0x0D3A1C, roughness: 0.7
+    });
+
+    // Playing surface (felt)
+    const surf = new THREE.Mesh(
+      new THREE.PlaneGeometry(TABLE_W, TABLE_L),
+      feltMat
+    );
+    surf.rotation.x = -Math.PI/2;
+    surf.receiveShadow = true;
+    this.tableGroup.add(surf);
+
+    // Table frame sides (North/South/East/West rails)
+    const RailProfiles = [
+      // [sx, sy, sz, px, py, pz]  outer rail
+      [TABLE_W + CUSHION*4, TABLE_TH, CUSHION*1.2, 0, -TABLE_TH/2 + CUSHION*0.6, -(TABLE_L/2 + CUSHION)],
+      [TABLE_W + CUSHION*4, TABLE_TH, CUSHION*1.2, 0, -TABLE_TH/2 + CUSHION*0.6,  (TABLE_L/2 + CUSHION)],
+      [CUSHION*1.2, TABLE_TH, TABLE_L, -(TABLE_W/2 + CUSHION), -TABLE_TH/2 + CUSHION*0.6, 0],
+      [CUSHION*1.2, TABLE_TH, TABLE_L,  (TABLE_W/2 + CUSHION), -TABLE_TH/2 + CUSHION*0.6, 0],
+    ];
+    for (const [sx,sy,sz,px,py,pz] of RailProfiles) {
+      const r = new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), woodMat.clone());
+      r.position.set(px, py, pz);
+      r.castShadow = true; r.receiveShadow = true;
+      this.tableGroup.add(r);
+    }
+
+    // Outer table body (below playing surface)
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(TABLE_W + CUSHION*4 + 4, 10, TABLE_L + CUSHION*4 + 4),
+      woodMat.clone()
+    );
+    body.position.set(0, -TABLE_TH - 5, 0);
+    body.castShadow = true;
+    this.tableGroup.add(body);
+
+    // Cushions (rubber bumpers) — elevated slightly above felt
+    const cushionY = 1.5;
+    const cH = BALL_R * 1.6;
+    const cushDefs = [
+      // [geom: BoxGeometry(w,h,d), pos]
+      [TABLE_W*0.45, cH, CUSHION*0.9, -TABLE_W*0.04, cushionY, -(TABLE_L/2+CUSHION*0.45)],
+      [TABLE_W*0.45, cH, CUSHION*0.9,  TABLE_W*0.04, cushionY, -(TABLE_L/2+CUSHION*0.45)],
+      [TABLE_W*0.45, cH, CUSHION*0.9, -TABLE_W*0.04, cushionY,  (TABLE_L/2+CUSHION*0.45)],
+      [TABLE_W*0.45, cH, CUSHION*0.9,  TABLE_W*0.04, cushionY,  (TABLE_L/2+CUSHION*0.45)],
+      [CUSHION*0.9, cH, TABLE_L*0.45, -(TABLE_W/2+CUSHION*0.45), cushionY, -TABLE_L*0.13],
+      [CUSHION*0.9, cH, TABLE_L*0.45, -(TABLE_W/2+CUSHION*0.45), cushionY,  TABLE_L*0.13],
+      [CUSHION*0.9, cH, TABLE_L*0.45,  (TABLE_W/2+CUSHION*0.45), cushionY, -TABLE_L*0.13],
+      [CUSHION*0.9, cH, TABLE_L*0.45,  (TABLE_W/2+CUSHION*0.45), cushionY,  TABLE_L*0.13],
+    ];
+    for (const [w,h,d,px,py,pz] of cushDefs) {
+      const cm = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), rubberMat);
+      cm.position.set(px, py, pz);
+      this.tableGroup.add(cm);
+    }
+
+    // Pocket holes (dark circles on surface)
+    const pocketMat = new THREE.MeshBasicMaterial({ color: 0x020102 });
+    const pocketPositions = [
+      [-TABLE_W/2, TABLE_L/2], [TABLE_W/2, TABLE_L/2],
+      [-TABLE_W/2, 0],         [TABLE_W/2, 0],
+      [-TABLE_W/2,-TABLE_L/2], [TABLE_W/2,-TABLE_L/2],
+    ];
+    for (const [px,pz] of pocketPositions) {
+      const isCorner = pz !== 0;
+      const r = isCorner ? BALL_R*2.4 : BALL_R*2.8;
+      const hole = new THREE.Mesh(
+        new THREE.CircleGeometry(r, 24),
+        pocketMat
+      );
+      hole.rotation.x = -Math.PI/2;
+      hole.position.set(px, 0.05, pz);
+      this.tableGroup.add(hole);
+
+      // Leather pocket lining ring
+      const leatherRing = new THREE.Mesh(
+        new THREE.RingGeometry(r, r+2.5, 24),
+        new THREE.MeshStandardMaterial({ color:0x1A0A04, roughness:0.6 })
+      );
+      leatherRing.rotation.x = -Math.PI/2;
+      leatherRing.position.set(px, 0.1, pz);
+      this.tableGroup.add(leatherRing);
+    }
+
+    // Table legs (4 corner legs)
+    const legMat = new THREE.MeshStandardMaterial({ map: woodTex, color:0x3A1500, roughness:0.3, metalness:0.05 });
+    const legPositions = [[-52,-52],[52,-52],[-52,52],[52,52]];
+    for (const [lx,lz] of legPositions) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(8, LEG_H, 8), legMat);
+      leg.position.set(lx, -(LEG_H/2 + TABLE_TH), lz);
+      leg.castShadow = true;
+      this.tableGroup.add(leg);
+    }
+
+    // Table skirt / apron between legs
+    const apronMat = new THREE.MeshStandardMaterial({ color:0x2A1000, roughness:0.5 });
+    const aprons = [
+      [TABLE_W - 8, 20, 6,  0,       -(LEG_H*0.6+TABLE_TH), -(TABLE_L/2+2)],
+      [TABLE_W - 8, 20, 6,  0,       -(LEG_H*0.6+TABLE_TH),  (TABLE_L/2+2)],
+      [6, 20, TABLE_L - 8, -(TABLE_W/2+2), -(LEG_H*0.6+TABLE_TH), 0],
+      [6, 20, TABLE_L - 8,  (TABLE_W/2+2), -(LEG_H*0.6+TABLE_TH), 0],
+    ];
+    for (const [w,h,d,px,py,pz] of aprons) {
+      const ap = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), apronMat);
+      ap.position.set(px, py, pz);
+      this.tableGroup.add(ap);
+    }
+
+    this.scene.add(this.tableGroup);
+  }
+
+  private buildBalls() {
+    // Remove existing ball meshes
+    for (const mesh of this.ballMeshes.values()) {
+      this.scene.remove(mesh);
+    }
+    this.ballMeshes.clear();
+
+    for (const b of this.balls) {
+      const geo = new THREE.SphereGeometry(BALL_R, 32, 32);
+      const tex = makeBallTexture(b.number);
+      const mat = new THREE.MeshPhysicalMaterial({
+        map: tex,
+        roughness: 0.08,
+        metalness: 0.0,
+        reflectivity: 0.8,
+        clearcoat: 0.7,
+        clearcoatRoughness: 0.04,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = false;
+      mesh.position.set(b.pos.x, BALL_R, b.pos.z);
+      this.scene.add(mesh);
+      this.ballMeshes.set(b.number, mesh);
+    }
+  }
+
+  private buildCue() {
+    // Remove old
+    if (this.cueGroup) { this.scene.remove(this.cueGroup); }
+    this.cueGroup = new THREE.Group();
+
+    // Cue body (tapered cylinder lying flat)
+    const cueGeo = new THREE.CylinderGeometry(0.35, 1.4, CUE_LEN, 12);
+    cueGeo.rotateZ(Math.PI/2); // lie along X axis
+    const cueMat = new THREE.MeshStandardMaterial({ color:0xC89050, roughness:0.25, metalness:0.05 });
+    this.cueMesh = new THREE.Mesh(cueGeo, cueMat);
+    this.cueMesh.castShadow = true;
+
+    // Cue tip (blue chalk)
+    const tipGeo = new THREE.CylinderGeometry(0.34, 0.38, 2, 8);
+    tipGeo.rotateZ(Math.PI/2);
+    const tip = new THREE.Mesh(tipGeo,
+      new THREE.MeshStandardMaterial({ color:0x1A6080, roughness:0.6 }));
+    tip.position.x = CUE_LEN/2 + 1;
+    this.cueMesh.add(tip);
+
+    // Wrap ring (decorative)
+    const wrapGeo = new THREE.CylinderGeometry(1.6, 1.6, 8, 12);
+    wrapGeo.rotateZ(Math.PI/2);
+    const wrap = new THREE.Mesh(wrapGeo,
+      new THREE.MeshStandardMaterial({ color:0x1A0A00, roughness:0.3 }));
+    wrap.position.x = -CUE_LEN/2 + 18;
+    this.cueMesh.add(wrap);
+
+    this.cueGroup.add(this.cueMesh);
+
+    // Aim guide line
+    const pts = [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-200)];
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+    this.cueGhostLine = new THREE.Line(lineGeo,
+      new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.18 }));
+    this.cueGroup.add(this.cueGhostLine);
+
+    this.scene.add(this.cueGroup);
+  }
+
+  // ── cue positioning ──
+  private updateCue() {
+    if (!this.cueGroup) return;
+    const cueBall = this.balls.find(b => b.number === 0);
+    if (!cueBall || cueBall.isPotted) { this.cueGroup.visible = false; return; }
+
+    const isPowering = this.isPowering;
+    const isActive = (this.phase === 'aiming' || this.phase === 'powering') &&
+      !this.currentPlayer?.isAI;
+
+    this.cueGroup.visible = isActive;
+    if (!isActive) return;
+
+    // Position group at cue ball
+    this.cueGroup.position.set(cueBall.pos.x, BALL_R, cueBall.pos.z);
+    // Rotate group around Y so local +X points FROM ball TOWARD mouse (aim direction)
+    this.cueGroup.rotation.y = this.aimAngle;
+
+    // Offset the cue mesh so tip is near the ball
+    // Local +X is toward mouse after rotation
+    // We want tip at (BALL_R + 2 + backswing) in local +X
+    const backswing = isPowering ? (this.power / 100) * 14 : 0;
+    const tipDist = BALL_R + 2 + backswing;
+    this.cueMesh.position.x = tipDist + CUE_LEN / 2;
+  }
+
+  // ── ball mesh sync ──
+  private syncBallMeshes() {
+    for (const b of this.balls) {
+      const mesh = this.ballMeshes.get(b.number);
+      if (!mesh) continue;
+      if (b.isPotted) {
+        mesh.visible = false;
+      } else {
+        mesh.visible = true;
+        mesh.position.set(b.pos.x, BALL_R, b.pos.z);
+        // Spin animation
+        const spd = Math.hypot(b.vel.x, b.vel.z);
+        if (spd > 0.1) {
+          const spinAxis = new THREE.Vector3(b.vel.z, 0, -b.vel.x).normalize();
+          mesh.rotateOnWorldAxis(spinAxis, spd * 0.03);
+        }
+      }
+    }
+  }
+
+  // ── input ──
+  private onMouseMove = (e: MouseEvent) => {
+    if (this.phase !== 'aiming' && this.phase !== 'powering') return;
+    if (this.currentPlayer?.isAI) return;
+
+    const rect = this.canvas.getBoundingClientRect();
+    this.mousePos.set(
+      ((e.clientX - rect.left) / rect.width)  * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1
+    );
+
+    const tablePos = this.getTableIntersect();
+    if (!tablePos) return;
+
+    const cueBall = this.balls.find(b => b.number === 0);
+    if (!cueBall) return;
+
+    const dx = tablePos.x - cueBall.pos.x;
+    const dz = tablePos.z - cueBall.pos.z;
+    this.aimAngle = Math.atan2(dx, dz); // toward mouse
+  };
+
+  private onMouseDown = (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    if (this.phase !== 'aiming') return;
+    if (this.currentPlayer?.isAI) return;
+    this.phase = 'powering';
+    this.isPowering = true;
+    this.powerStart = performance.now();
+    this.power = 0;
+    this.emitHUD();
+  };
+
+  private onMouseUp = (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    if (this.phase !== 'powering') return;
+    this.isPowering = false;
+    const held = (performance.now() - this.powerStart) / 1000;
+    this.power = Math.min(100, held * 60);
+    this.executeShot();
+  };
+
+  private onResize = () => {
+    const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
+    this.camera.aspect = w/h;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(w, h, false);
+  };
+
+  private getTableIntersect(): THREE.Vector3 | null {
+    this.raycaster.setFromCamera(this.mousePos, this.camera);
+    const target = new THREE.Vector3();
+    const hit = this.raycaster.ray.intersectPlane(this.tablePlane, target);
+    return hit ? target : null;
+  }
+
+  // ── shooting ──
+  private executeShot() {
+    const cueBall = this.balls.find(b => b.number === 0);
+    if (!cueBall || cueBall.isPotted) return;
+
+    this.phase = 'simulating';
+    this.firstHit = null;
+    this.pottedInShot = [];
+    this.cuePottedInShot = false;
+
+    // Reset firstContactGiven flags
+    for (const b of this.balls) { b.firstContactGiven = false; }
+
+    // Shoot direction: FROM mouse TOWARD ball → but ball travels AWAY from mouse
+    // aimAngle is FROM ball TOWARD mouse. Ball goes AWAY from mouse = opposite.
+    const shootAngle = this.aimAngle + Math.PI;
+    const dir: Vec2 = { x: Math.sin(shootAngle), z: Math.cos(shootAngle) };
+    const vel = shotVelocity(dir, this.power);
+    cueBall.vel = vel;
+
+    this.cueGroup.visible = false;
+    this.setCam(this.camMode === 'overhead' ? 'overhead' : 'cinematic', false);
+    this.emitHUD();
+  }
+
+  // ── turn management ──
+  private get currentPlayer(): PlayerState | null {
+    return this.players[this.currentPlayerIndex] ?? null;
+  }
+
+  private startTurn() {
+    if (this.phase === 'roundEnd') return;
+
+    this.targetBall = getNextTarget(this.balls);
+    if (this.targetBall < 0) { this.endRound(); return; }
+
+    // Check if all active players are benched
+    const active = this.players.filter(p => !p.isBenched);
+    if (active.length === 0) { this.endRound(); return; }
+
+    // Skip benched players
+    let tries = 0;
+    while (this.players[this.currentPlayerIndex]?.isBenched && tries < this.players.length) {
+      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+      tries++;
+    }
+
+    this.phase = 'aiming';
+    this.power = 0;
+    this.isPowering = false;
+    this.shotResult = null;
+    this.timeLeft = TURN_DURATION;
+    this.lastTimerTick = performance.now();
+
+    // Place cue ball if potted
+    const cueBall = this.balls.find(b => b.number === 0);
+    if (cueBall && cueBall.isPotted) {
+      cueBall.isPotted = false;
+      cueBall.pos = { x: 0, z: -60 };
+      cueBall.vel = { x: 0, z: 0 };
+      const mesh = this.ballMeshes.get(0);
+      if (mesh) { mesh.visible = true; mesh.position.set(0, BALL_R, -60); }
+    }
+
+    if (this.currentPlayer?.isAI) {
+      this.setCam('cinematic', false);
+      this.aiThinkTimeout = setTimeout(() => this.doAIShot(), 1200);
+    } else {
+      this.setCam('overhead', false);
+    }
+
+    this.emitHUD();
+  }
+
+  private doAIShot() {
+    const cueBall = this.balls.find(b => b.number === 0);
+    const target = this.balls.find(b => b.number === this.targetBall);
+    if (!cueBall || !target) return;
+
+    const result = computeAIShot(cueBall, target, this.balls);
+    this.power = result.power;
+    // Compute aimAngle from direction
+    const angle = Math.atan2(result.direction.x, result.direction.z);
+    this.aimAngle = angle + Math.PI; // aimAngle = toward mouse = opposite of shoot dir
+
+    this.executeShot();
+  }
+
+  private onShotFinished() {
+    const result = evaluateShot({
+      cueBallPotted: this.cuePottedInShot,
+      firstHit: this.firstHit,
+      pottedInShot: this.pottedInShot,
+      targetBall: this.targetBall,
+    });
+
+    this.shotResult = result;
+    this.players[this.currentPlayerIndex] = applyResult(
+      this.players[this.currentPlayerIndex], result, this.balls
+    );
+    this.players = updateBench(this.players, this.balls);
+
+    // Advance target
+    if (result.type === 'success' || result.type === 'carom') {
+      this.targetBall = getNextTarget(this.balls);
+    }
+
+    this.phase = 'evaluating';
+    this.emitHUD();
+
+    const extraTurn = result.extraTurn;
+    const target = getNextTarget(this.balls);
+
+    this.evalTimeout = setTimeout(() => {
+      this.shotResult = null;
+      if (target < 0) {
+        this.endRound();
+        return;
+      }
+      if (!extraTurn) {
+        this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+      }
+      this.startTurn();
+    }, 2000);
+  }
+
+  skipTurn() {
+    if (this.phase !== 'aiming' && this.phase !== 'powering') return;
+    this.shotResult = { type:'miss', pottedBalls:[], scoreChange:0, message:'Turn forfeited', extraTurn:false };
+    this.phase = 'evaluating';
+    this.isPowering = false;
+    this.emitHUD();
+    this.evalTimeout = setTimeout(() => {
+      this.shotResult = null;
+      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+      this.startTurn();
+    }, 1500);
+  }
+
+  private endRound() {
+    this.phase = 'roundEnd';
+    const winners = getWinners(this.players);
+    const payout = calcPayout(this.stake, this.players.length, winners.length);
+    for (const w of winners) {
+      const idx = this.players.indexOf(w);
+      this.players[idx] = { ...w, balance: w.balance + payout.perWinner };
+    }
+    if (this.cueGroup) this.cueGroup.visible = false;
+    this.setCam('cinematic', false);
+    this.emit('roundEnd', { players: this.players, winners, payout });
+    this.emitHUD();
+  }
+
+  // ── camera ──
+  setCam(mode: 'overhead'|'cinematic'|'aim', immediate = false) {
+    this.camMode = mode;
+    if (mode === 'overhead') {
+      this.camTargetPos.set(0, 300, 80);
+      this.camTargetLook.set(0, 0, 0);
+    } else if (mode === 'cinematic') {
+      const angle = (Date.now() * 0.0001) % (Math.PI * 2);
+      this.camTargetPos.set(Math.cos(angle)*220, 160, Math.sin(angle)*180 + 50);
+      this.camTargetLook.set(0, 0, 0);
+    } else {
+      const cueBall = this.balls.find(b => b.number === 0);
+      if (cueBall) {
+        const backDir = { x: Math.sin(this.aimAngle), z: Math.cos(this.aimAngle) };
+        this.camTargetPos.set(
+          cueBall.pos.x + backDir.x * 100,
+          90,
+          cueBall.pos.z + backDir.z * 100
+        );
+        this.camTargetLook.set(cueBall.pos.x, BALL_R, cueBall.pos.z);
+      }
+    }
+    if (immediate) {
+      this.camera.position.copy(this.camTargetPos);
+      this.camera.lookAt(this.camTargetLook);
+    }
+  }
+
+  cycleCam() {
+    const modes: ('overhead'|'cinematic'|'aim')[] = ['overhead','cinematic','aim'];
+    const idx = modes.indexOf(this.camMode);
+    this.setCam(modes[(idx+1) % modes.length], false);
+    this.emitHUD();
+  }
+
+  // ── event system ──
+  on(event: string, handler: EventHandler) {
+    if (!this.events.has(event)) this.events.set(event, []);
+    this.events.get(event)!.push(handler);
+  }
+  off(event: string, handler: EventHandler) {
+    const arr = this.events.get(event);
+    if (arr) this.events.set(event, arr.filter(h => h !== handler));
+  }
+  emit(event: string, data?: unknown) {
+    this.events.get(event)?.forEach(h => h(data));
+  }
+
+  private emitHUD() {
+    const hud: HUDState = {
+      players:              [...this.players],
+      currentPlayerIndex:   this.currentPlayerIndex,
+      targetBall:           this.targetBall,
+      timeLeft:             Math.ceil(this.timeLeft),
+      power:                Math.round(this.power),
+      phase:                this.phase,
+      prizePool:            this.prizePool,
+      shotResult:           this.shotResult,
+      stake:                this.stake,
+      camMode:              this.camMode,
+    };
+    this.emit('hud', hud);
+  }
+
+  // ── main loop ──
+  private gameLoop = (time: number) => {
+    this.rafId = requestAnimationFrame(this.gameLoop);
+    const dt = Math.min((time - this.lastTime) / 1000, 0.05);
+    this.lastTime = time;
+
+    if (this.phase === 'simulating') {
+      const firstContact = (hitter: number, hit: number) => {
+        if (hitter === 0 && this.firstHit === null) {
+          this.firstHit = hit;
+        }
+      };
+      const potted = stepPhysics(this.balls, dt, firstContact);
+      for (const n of potted) {
+        if (n === 0) this.cuePottedInShot = true;
+        else if (!this.pottedInShot.includes(n)) this.pottedInShot.push(n);
+      }
+      if (allStopped(this.balls)) {
+        this.onShotFinished();
+      }
+    }
+
+    // Timer (only when game is active)
+    if (this.players.length > 0 && (this.phase === 'aiming' || this.phase === 'powering')) {
+      const now = performance.now();
+      const elapsed = (now - this.lastTimerTick) / 1000;
+      if (elapsed >= 1) {
+        this.timeLeft = Math.max(0, this.timeLeft - Math.floor(elapsed));
+        this.lastTimerTick = now;
+        if (this.timeLeft <= 0 && !this.currentPlayer?.isAI) {
+          this.skipTurn();
+        }
+        this.emitHUD();
+      }
+    }
+
+    // Power charging
+    if (this.phase === 'powering' && this.isPowering) {
+      const held = (performance.now() - this.powerStart) / 1000;
+      this.power = Math.min(100, held * 60);
+      this.emitHUD();
+    }
+
+    // Cinematic cam slow rotation
+    if (this.phase === 'simulating' || this.phase === 'evaluating') {
+      this.setCam('cinematic', false);
+    }
+
+    // Camera smooth follow
+    this.camera.position.lerp(this.camTargetPos, 0.06);
+    const lookTarget = new THREE.Vector3().lerpVectors(
+      this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(100).add(this.camera.position),
+      this.camTargetLook,
+      0.06
+    );
+    this.camera.lookAt(this.camTargetLook);
+
+    this.syncBallMeshes();
+    this.updateCue();
+    this.renderer.render(this.scene, this.camera);
+  };
+
+  dispose() {
+    cancelAnimationFrame(this.rafId);
+    if (this.aiThinkTimeout) clearTimeout(this.aiThinkTimeout);
+    if (this.evalTimeout) clearTimeout(this.evalTimeout);
+    if (this.canvas) {
+      this.canvas.removeEventListener('mousemove', this.onMouseMove);
+      this.canvas.removeEventListener('mousedown', this.onMouseDown);
+      this.canvas.removeEventListener('mouseup',   this.onMouseUp);
+    }
+    window.removeEventListener('resize', this.onResize);
+    if (this.renderer) this.renderer.dispose();
+  }
+}
