@@ -112,16 +112,23 @@ function makeWoodTexture(): THREE.CanvasTexture {
 }
 
 function makeFeltTexture(): THREE.CanvasTexture {
-  const W = 256, H = 256;
+  const W = 512, H = 512;
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const ctx = c.getContext('2d')!;
-  ctx.fillStyle = '#1B5E30'; ctx.fillRect(0,0,W,H);
-  for (let i=0; i<2000; i++) {
-    ctx.fillStyle = `rgba(${Math.random()>0.5?60:20},${Math.random()>0.5?120:80},${Math.random()>0.5?50:30},0.15)`;
-    ctx.fillRect(Math.random()*W, Math.random()*H, 1.5, 1.5);
+  ctx.fillStyle = '#1A7238'; ctx.fillRect(0,0,W,H);
+  // Fine felt weave
+  for (let i=0; i<4000; i++) {
+    const bright = Math.random() > 0.5;
+    ctx.fillStyle = bright
+      ? `rgba(80,180,100,${0.06+Math.random()*0.08})`
+      : `rgba(5,30,15,${0.05+Math.random()*0.07})`;
+    ctx.fillRect(Math.random()*W, Math.random()*H, 1+Math.random(), 1+Math.random());
   }
-  const g = ctx.createRadialGradient(W/2,H/2,0,W/2,H/2,W/2);
-  g.addColorStop(0,'rgba(255,255,255,0.04)'); g.addColorStop(1,'rgba(0,0,0,0.15)');
+  // Subtle directional sheen
+  const g = ctx.createLinearGradient(0,0,W,H);
+  g.addColorStop(0,'rgba(255,255,255,0.06)');
+  g.addColorStop(0.5,'rgba(255,255,255,0.0)');
+  g.addColorStop(1,'rgba(0,0,0,0.1)');
   ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -315,150 +322,220 @@ export class GameEngine {
 
   // ── scene building ──
   private setupLights() {
-    // Very dim ambient
-    const amb = new THREE.AmbientLight(0x1a0f2e, 0.5);
+    // Dim ambient — deep purple-black
+    const amb = new THREE.AmbientLight(0x110825, 0.5);
     this.scene.add(amb);
 
-    // Hemisphere light for gentle fill
-    const hemi = new THREE.HemisphereLight(0x2a1a4a, 0x0a0508, 0.4);
+    // Hemisphere sky/ground fill
+    const hemi = new THREE.HemisphereLight(0x1A0A38, 0x060305, 0.35);
     this.scene.add(hemi);
 
-    // 3 pendant spotlights over the table
-    const pendantCols = [0xFFF5DC, 0xFFEEC0, 0xFFF0CC];
-    const pendantX = [-40, 0, 40];
-    for (let i=0; i<3; i++) {
-      const spot = new THREE.SpotLight(pendantCols[i], 120, 500, Math.PI/5, 0.4, 1.5);
-      spot.position.set(pendantX[i], 190, 0);
-      spot.target.position.set(pendantX[i], 0, 0);
+    // 2 warm linear LED bar spotlights above the table (matching ref image 1)
+    for (const lx of [-46, 46]) {
+      const spot = new THREE.SpotLight(0xFFEDD0, 160, 560, Math.PI / 7, 0.38, 1.4);
+      spot.position.set(lx, 205, 0);
+      spot.target.position.set(lx, 0, 0);
       spot.castShadow = true;
       spot.shadow.mapSize.set(1024, 1024);
       spot.shadow.camera.near = 10;
-      spot.shadow.camera.far = 400;
+      spot.shadow.camera.far = 460;
       this.scene.add(spot, spot.target);
+    }
 
-      // Pendant light body
-      const pendGeo = new THREE.CylinderGeometry(1.5, 7, 12, 8);
-      const pendMat = new THREE.MeshStandardMaterial({ color:0x1a1a1a, roughness:0.5, metalness:0.8 });
-      const pend = new THREE.Mesh(pendGeo, pendMat);
-      pend.position.set(pendantX[i], 196, 0);
-      this.scene.add(pend);
-
-      // Cord
-      const cord = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.2,0.2,100,4),
-        new THREE.MeshStandardMaterial({ color:0x111111 })
-      );
-      cord.position.set(pendantX[i], 246, 0);
-      this.scene.add(cord);
+    // ── Purple / Magenta LED cove strip lights along ceiling edges ──
+    // Reference image 1: continuous bright strip on all 4 wall-ceiling junctions
+    const EDGE = 390;
+    const NEON_Y = 295;
+    const coveStrips = [
+      { color: 0xBB00FF, pos: [  0,    NEON_Y, -EDGE  ], intensity: 7 },  // N – purple
+      { color: 0xFF00BB, pos: [  0,    NEON_Y,  EDGE  ], intensity: 7 },  // S – magenta
+      { color: 0xCC00EE, pos: [-EDGE,  NEON_Y,  0     ], intensity: 6 },  // W – purple
+      { color: 0xFF00CC, pos: [ EDGE,  NEON_Y,  0     ], intensity: 6 },  // E – magenta
+      { color: 0xDD00DD, pos: [-EDGE*0.65, NEON_Y, -EDGE*0.65], intensity: 3.5 },
+      { color: 0xDD00DD, pos: [ EDGE*0.65, NEON_Y, -EDGE*0.65], intensity: 3.5 },
+      { color: 0xDD00DD, pos: [-EDGE*0.65, NEON_Y,  EDGE*0.65], intensity: 3.5 },
+      { color: 0xDD00DD, pos: [ EDGE*0.65, NEON_Y,  EDGE*0.65], intensity: 3.5 },
+    ];
+    for (const { color, pos, intensity } of coveStrips) {
+      const pl = new THREE.PointLight(color, intensity, 500, 1.6);
+      pl.position.set(pos[0], pos[1], pos[2]);
+      this.scene.add(pl);
     }
 
     // Neon sign fill lights
-    const neonLights = [
-      { color:0x00FF88, pos:new THREE.Vector3(-280, 80, -200), intensity: 3 },
-      { color:0xFF2090, pos:new THREE.Vector3(280, 100, -200), intensity: 3 },
-      { color:0x4488FF, pos:new THREE.Vector3(0, 80, 260), intensity: 2 },
+    const signFills: [number, number, number, number][] = [
+      [0x00FF88, -280, 80, -200],
+      [0xFF2090,  280, 80, -200],
+      [0x4488FF,    0, 60,  260],
     ];
-    for (const n of neonLights) {
-      const pl = new THREE.PointLight(n.color, n.intensity, 300, 2);
-      pl.position.copy(n.pos);
+    for (const [color, x, y, z] of signFills) {
+      const pl = new THREE.PointLight(color, 2, 300, 2);
+      pl.position.set(x, y, z);
       this.scene.add(pl);
     }
   }
 
   private buildRoom() {
     const room = new THREE.Group();
+    const ROOM   = 420;
+    const CEIL_Y = 310;
+    const FLOOR_Y = -(LEG_H + TABLE_TH);
+    const WALL_H = CEIL_Y - FLOOR_Y;
 
-    // Floor
+    // ── Floor ────────────────────────────────────────────────
     const floorTex = makeFloorTexture();
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(900, 900),
-      new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.85, metalness: 0.05 })
+      new THREE.PlaneGeometry(ROOM*2.2, ROOM*2.2),
+      new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.88, metalness: 0.04 })
     );
     floor.rotation.x = -Math.PI/2;
-    floor.position.y = -LEG_H - TABLE_TH;
+    floor.position.y = FLOOR_Y;
     floor.receiveShadow = true;
     room.add(floor);
 
-    // Ceiling
+    // ── Ceiling — very dark ───────────────────────────────────
     const ceiling = new THREE.Mesh(
-      new THREE.PlaneGeometry(900, 900),
-      new THREE.MeshStandardMaterial({ color: 0x0A0610, roughness:1 })
+      new THREE.PlaneGeometry(ROOM*2.2, ROOM*2.2),
+      new THREE.MeshStandardMaterial({ color: 0x050308, roughness: 1 })
     );
     ceiling.rotation.x = Math.PI/2;
-    ceiling.position.y = 330;
+    ceiling.position.y = CEIL_Y;
     room.add(ceiling);
 
-    // Back wall (north, Z-)
-    const wallMat = new THREE.MeshStandardMaterial({ color:0x0F0C1A, roughness:0.9 });
-    const bwall = new THREE.Mesh(new THREE.PlaneGeometry(900,420), wallMat.clone());
-    bwall.position.set(0, 120, -420);
-    room.add(bwall);
+    // ── Walls: two-tone — warm amber lower + very dark upper ──
+    const wallDefs = [
+      { pos: [    0, 0, -ROOM], ry: 0 },           // North
+      { pos: [    0, 0,  ROOM], ry: Math.PI },     // South
+      { pos: [-ROOM, 0,     0], ry:  Math.PI/2 },  // West
+      { pos: [ ROOM, 0,     0], ry: -Math.PI/2 },  // East
+    ];
+    for (const { pos, ry } of wallDefs) {
+      const midY = FLOOR_Y + WALL_H * 0.5;
+      // Lower warm panel (like image 1 — amber/brown under neon strip)
+      const lower = new THREE.Mesh(
+        new THREE.PlaneGeometry(ROOM*2.1, WALL_H * 0.52),
+        new THREE.MeshStandardMaterial({ color: 0x1C0D06, roughness: 0.9 })
+      );
+      lower.rotation.y = ry;
+      lower.position.set(pos[0], FLOOR_Y + WALL_H * 0.26, pos[2]);
+      room.add(lower);
 
-    // Front wall (Z+) with bar counter
-    const fwall = new THREE.Mesh(new THREE.PlaneGeometry(900,420), wallMat.clone());
-    fwall.rotation.y = Math.PI;
-    fwall.position.set(0, 120, 420);
-    room.add(fwall);
+      // Upper dark panel
+      const upper = new THREE.Mesh(
+        new THREE.PlaneGeometry(ROOM*2.1, WALL_H * 0.5),
+        new THREE.MeshStandardMaterial({ color: 0x08060F, roughness: 0.95 })
+      );
+      upper.rotation.y = ry;
+      upper.position.set(pos[0], midY + WALL_H * 0.26, pos[2]);
+      room.add(upper);
+    }
 
-    // Left wall (X-)
-    const lwall = new THREE.Mesh(new THREE.PlaneGeometry(900,420), wallMat.clone());
-    lwall.rotation.y = Math.PI/2;
-    lwall.position.set(-420, 120, 0);
-    room.add(lwall);
+    // ── LED Cove Strips (emissive meshes) — ref image 1 signature ──
+    // Continuous bright purple/magenta strip at all 4 ceiling edges
+    const ledPurple  = new THREE.MeshBasicMaterial({ color: 0xCC00FF });
+    const ledMagenta = new THREE.MeshBasicMaterial({ color: 0xFF00CC });
+    const STRIP_T = 4, STRIP_D = 9;
+    const cy = CEIL_Y - STRIP_T * 0.5 - 1;
 
-    // Right wall (X+)
-    const rwall = new THREE.Mesh(new THREE.PlaneGeometry(900,420), wallMat.clone());
-    rwall.rotation.y = -Math.PI/2;
-    rwall.position.set(420, 120, 0);
-    room.add(rwall);
+    // N wall (purple)
+    room.add(Object.assign(
+      new THREE.Mesh(new THREE.BoxGeometry(ROOM*2-10, STRIP_T, STRIP_D), ledPurple),
+      { position: new THREE.Vector3(0, cy, -(ROOM-STRIP_D*0.5)) }
+    ));
+    // S wall (magenta)
+    room.add(Object.assign(
+      new THREE.Mesh(new THREE.BoxGeometry(ROOM*2-10, STRIP_T, STRIP_D), ledMagenta),
+      { position: new THREE.Vector3(0, cy, ROOM-STRIP_D*0.5) }
+    ));
+    // W wall (purple)
+    room.add(Object.assign(
+      new THREE.Mesh(new THREE.BoxGeometry(STRIP_D, STRIP_T, ROOM*2-10), ledPurple),
+      { position: new THREE.Vector3(-(ROOM-STRIP_D*0.5), cy, 0) }
+    ));
+    // E wall (magenta)
+    room.add(Object.assign(
+      new THREE.Mesh(new THREE.BoxGeometry(STRIP_D, STRIP_T, ROOM*2-10), ledMagenta),
+      { position: new THREE.Vector3(ROOM-STRIP_D*0.5, cy, 0) }
+    ));
 
-    // Big window on back wall — Nairobi skyline
+    // ── Hanging LED bar fixtures above the table (warm white linear) ──
+    const warmWhiteMat = new THREE.MeshBasicMaterial({ color: 0xFFF0D8 });
+    const metalBlack = new THREE.MeshStandardMaterial({ color:0x0E0E0E, roughness:0.4, metalness:0.9 });
+    for (const lx of [-46, 46]) {
+      // Housing
+      const housing = new THREE.Mesh(
+        new THREE.BoxGeometry(10, 7, TABLE_L * 0.82),
+        metalBlack
+      );
+      housing.position.set(lx, CEIL_Y - 45, 0);
+      room.add(housing);
+      // Glowing diffuser panel
+      const diffuser = new THREE.Mesh(
+        new THREE.BoxGeometry(8, 2, TABLE_L * 0.80),
+        warmWhiteMat
+      );
+      diffuser.position.set(lx, CEIL_Y - 49, 0);
+      room.add(diffuser);
+      // Thin hanging rod
+      const rodH = CEIL_Y - (CEIL_Y - 45) - 3.5;
+      const rod = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.6, 0.6, rodH, 5),
+        metalBlack
+      );
+      rod.position.set(lx, CEIL_Y - rodH * 0.5, 0);
+      room.add(rod);
+    }
+
+    // ── Nairobi skyline window on north wall ──────────────────
     const skyTex = makeSkylineTexture();
     const window3d = new THREE.Mesh(
-      new THREE.PlaneGeometry(340, 180),
+      new THREE.PlaneGeometry(320, 160),
       new THREE.MeshBasicMaterial({ map: skyTex })
     );
-    window3d.position.set(0, 120, -419);
+    window3d.position.set(0, FLOOR_Y + WALL_H * 0.55, -ROOM + 1);
     room.add(window3d);
 
-    // Window frame
-    const frameMat = new THREE.MeshStandardMaterial({ color:0x1A1010, roughness:0.5, metalness:0.5 });
-    const frameH = new THREE.Mesh(new THREE.BoxGeometry(360, 6, 4), frameMat);
-    frameH.position.set(0, 213, -418); room.add(frameH);
-    const frameH2 = frameH.clone(); frameH2.position.y = 30; room.add(frameH2);
-    const frameV = new THREE.Mesh(new THREE.BoxGeometry(6, 186, 4), frameMat);
-    frameV.position.set(-183, 122, -418); room.add(frameV);
-    const frameV2 = frameV.clone(); frameV2.position.x = 183; room.add(frameV2);
+    const frameMat = new THREE.MeshStandardMaterial({ color:0x0D0D0D, roughness:0.4, metalness:0.6 });
+    const fH = new THREE.Mesh(new THREE.BoxGeometry(340, 5, 3), frameMat);
+    fH.position.set(0, FLOOR_Y + WALL_H*0.55 + 82, -ROOM+1); room.add(fH);
+    const fH2 = fH.clone(); fH2.position.y -= 164; room.add(fH2);
+    const fV = new THREE.Mesh(new THREE.BoxGeometry(5, 165, 3), frameMat);
+    fV.position.set(-170, FLOOR_Y + WALL_H*0.55, -ROOM+1); room.add(fV);
+    const fV2 = fV.clone(); fV2.position.x = 170; room.add(fV2);
 
-    // Neon signs
-    this.addNeonSign(room, 'KILLER POOL', -180, 170, -415, 0x00FF88, 1.2);
-    this.addNeonSign(room, 'NAIROBI NIGHTS', 160, 160, -415, 0xFF2090, 0.9);
-    this.addNeonSign(room, 'BILLIARDS', -350, 100, -80, 0x44AAFF, 1.0, Math.PI/2);
+    // ── Neon signs ────────────────────────────────────────────
+    this.addNeonSign(room, 'KILLER POOL',   -165, FLOOR_Y + WALL_H*0.82, -ROOM+2, 0x00FF88, 1.2);
+    this.addNeonSign(room, 'NAIROBI NIGHTS', 155, FLOOR_Y + WALL_H*0.78, -ROOM+2, 0xFF2090, 0.9);
+    this.addNeonSign(room, 'BILLIARDS',      -ROOM+2, FLOOR_Y+WALL_H*0.42, 0, 0x44AAFF, 1.0, Math.PI/2);
 
-    // Bar counter (front)
+    // ── Bar counter + stools (south wall) ─────────────────────
+    const barY = FLOOR_Y + 56;
     const barTop = new THREE.Mesh(
-      new THREE.BoxGeometry(300, 6, 50),
-      new THREE.MeshStandardMaterial({ color:0x1A0A04, roughness:0.3, metalness:0.1 })
+      new THREE.BoxGeometry(320, 6, 55),
+      new THREE.MeshStandardMaterial({ color:0x140804, roughness:0.3, metalness:0.15 })
     );
-    barTop.position.set(0, -20, 380);
+    barTop.position.set(0, barY, ROOM - 58);
     room.add(barTop);
     const barFront = new THREE.Mesh(
-      new THREE.BoxGeometry(300, 60, 8),
-      new THREE.MeshStandardMaterial({ color:0x0F0602, roughness:0.6 })
+      new THREE.BoxGeometry(320, 60, 8),
+      new THREE.MeshStandardMaterial({ color:0x0C0502, roughness:0.7 })
     );
-    barFront.position.set(0, -53, 359);
+    barFront.position.set(0, barY - 33, ROOM - 35);
     room.add(barFront);
 
-    // Stools
-    for (let sx=-2; sx<=2; sx++) {
+    for (let sx = -2; sx <= 2; sx++) {
       const stool = new THREE.Group();
-      const seat = new THREE.Mesh(new THREE.CylinderGeometry(8,8,3,12),
-        new THREE.MeshStandardMaterial({ color:0x1A0808, roughness:0.4 }));
+      const seat = new THREE.Mesh(
+        new THREE.CylinderGeometry(9, 9, 3, 14),
+        new THREE.MeshStandardMaterial({ color:0x1A0808, roughness:0.4 })
+      );
       seat.position.y = 3; stool.add(seat);
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(1.5,1.5,40,8),
-        new THREE.MeshStandardMaterial({ color:0x2A1A0A, roughness:0.3, metalness:0.6 }));
-      leg.position.y = -17; stool.add(leg);
-      stool.position.set(sx*55, -58, 350);
+      const sLeg = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.4, 1.4, 46, 8),
+        new THREE.MeshStandardMaterial({ color:0x0E0E0E, roughness:0.3, metalness:0.85 })
+      );
+      sLeg.position.y = -20; stool.add(sLeg);
+      stool.position.set(sx * 62, barY - 20, ROOM - 65);
       room.add(stool);
     }
 
@@ -500,16 +577,16 @@ export class GameEngine {
     const feltTex = makeFeltTexture();
 
     const woodMat = new THREE.MeshStandardMaterial({
-      map: woodTex, roughness: 0.4, metalness: 0.05, color: 0x5C2800
+      map: woodTex, roughness: 0.35, metalness: 0.08, color: 0x0D0808
     });
     const feltMat = new THREE.MeshStandardMaterial({
-      map: feltTex, roughness: 0.9, metalness: 0.0, color: 0x1B6535
+      map: feltTex, roughness: 0.88, metalness: 0.0, color: 0x1A7238
     });
     const cushMat = new THREE.MeshStandardMaterial({
-      color: 0x165028, roughness: 0.85
+      color: 0x1A6530, roughness: 0.85
     });
     const rubberMat = new THREE.MeshStandardMaterial({
-      color: 0x0D3A1C, roughness: 0.7
+      color: 0x113A1E, roughness: 0.72
     });
 
     // Playing surface (felt)
@@ -593,23 +670,23 @@ export class GameEngine {
       this.tableGroup.add(leatherRing);
     }
 
-    // Table legs (4 corner legs)
-    const legMat = new THREE.MeshStandardMaterial({ map: woodTex, color:0x3A1500, roughness:0.3, metalness:0.05 });
+    // Table legs — dark charcoal with subtle metallic sheen
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x0E0A0A, roughness: 0.25, metalness: 0.55 });
     const legPositions = [[-52,-52],[52,-52],[-52,52],[52,52]];
     for (const [lx,lz] of legPositions) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(8, LEG_H, 8), legMat);
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(9, LEG_H, 9), legMat);
       leg.position.set(lx, -(LEG_H/2 + TABLE_TH), lz);
       leg.castShadow = true;
       this.tableGroup.add(leg);
     }
 
     // Table skirt / apron between legs
-    const apronMat = new THREE.MeshStandardMaterial({ color:0x2A1000, roughness:0.5 });
+    const apronMat = new THREE.MeshStandardMaterial({ color: 0x0B0808, roughness: 0.4, metalness: 0.3 });
     const aprons = [
-      [TABLE_W - 8, 20, 6,  0,       -(LEG_H*0.6+TABLE_TH), -(TABLE_L/2+2)],
-      [TABLE_W - 8, 20, 6,  0,       -(LEG_H*0.6+TABLE_TH),  (TABLE_L/2+2)],
-      [6, 20, TABLE_L - 8, -(TABLE_W/2+2), -(LEG_H*0.6+TABLE_TH), 0],
-      [6, 20, TABLE_L - 8,  (TABLE_W/2+2), -(LEG_H*0.6+TABLE_TH), 0],
+      [TABLE_W - 8, 22, 6,  0,            -(LEG_H*0.6+TABLE_TH), -(TABLE_L/2+2)],
+      [TABLE_W - 8, 22, 6,  0,            -(LEG_H*0.6+TABLE_TH),  (TABLE_L/2+2)],
+      [6, 22, TABLE_L - 8, -(TABLE_W/2+2), -(LEG_H*0.6+TABLE_TH), 0],
+      [6, 22, TABLE_L - 8,  (TABLE_W/2+2), -(LEG_H*0.6+TABLE_TH), 0],
     ];
     for (const [w,h,d,px,py,pz] of aprons) {
       const ap = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), apronMat);
