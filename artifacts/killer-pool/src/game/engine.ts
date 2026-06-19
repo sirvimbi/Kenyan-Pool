@@ -5,6 +5,7 @@ import {
   BALL_VALUES, STARTING_BALANCE, TURN_DURATION, HW, HL
 } from './types';
 import { stepPhysics, allStopped, shotVelocity } from './physics';
+import { sound } from './sound';
 import {
   createPlayers, getNextTarget, evaluateShot, applyResult,
   updateBench, getWinners, calcPayout
@@ -270,7 +271,7 @@ export class GameEngine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = false;           // shadows off — diffused table lighting
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 2.8;
+    this.renderer.toneMappingExposure = 2.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
@@ -321,36 +322,34 @@ export class GameEngine {
 
   // ── scene building ──
   private setupLights() {
-    // ── Bright ambient so nothing is pitch-black ─────────────────────────
-    const amb = new THREE.AmbientLight(0xC8B8FF, 3.5);
+    // Ambient — visible but not blinding
+    const amb = new THREE.AmbientLight(0xC8B8FF, 1.8);
     this.scene.add(amb);
 
-    // Strong hemisphere for sky/ground fill
-    const hemi = new THREE.HemisphereLight(0xD0C0FF, 0x302040, 2.5);
+    // Hemisphere fill
+    const hemi = new THREE.HemisphereLight(0xD0C0FF, 0x282030, 1.4);
     this.scene.add(hemi);
 
-    // ── Table fill lights — NO shadows, wide angle, diffused ─────────────
-    // Grid of 5 PointLights tight above the table surface for even illumination
+    // ── Table fill lights — NO shadows, diffused grid ────────────────────
     const TABLE_FILL_Y = 160;
     const tableFillPositions: [number, number, number][] = [
-      [  0,  TABLE_FILL_Y,   0],   // centre
-      [-45,  TABLE_FILL_Y, -55],   // far-left
-      [ 45,  TABLE_FILL_Y, -55],   // far-right
-      [-45,  TABLE_FILL_Y,  55],   // near-left
-      [ 45,  TABLE_FILL_Y,  55],   // near-right
+      [  0,  TABLE_FILL_Y,   0],
+      [-45,  TABLE_FILL_Y, -55],
+      [ 45,  TABLE_FILL_Y, -55],
+      [-45,  TABLE_FILL_Y,  55],
+      [ 45,  TABLE_FILL_Y,  55],
     ];
     for (const [x, y, z] of tableFillPositions) {
-      const pl = new THREE.PointLight(0xFFEEDD, 600, 380, 0.8);
+      const pl = new THREE.PointLight(0xFFEEDD, 280, 340, 1.0);
       pl.position.set(x, y, z);
       this.scene.add(pl);
     }
 
     // 2 overhead SpotLights matching the hanging LED bar fixtures (no shadows)
     for (const lx of [-46, 46]) {
-      const spot = new THREE.SpotLight(0xFFEDD0, 800, 600, Math.PI / 5, 0.25, 0.8);
+      const spot = new THREE.SpotLight(0xFFEDD0, 420, 550, Math.PI / 5, 0.28, 0.9);
       spot.position.set(lx, 200, 0);
       spot.target.position.set(lx, 0, 0);
-      // castShadow deliberately OFF — diffused look
       this.scene.add(spot, spot.target);
     }
 
@@ -358,14 +357,14 @@ export class GameEngine {
     const EDGE = 390;
     const NEON_Y = 295;
     const coveStrips: [number, number, number, number, number][] = [
-      [0xBB00FF,    0, NEON_Y, -EDGE,   18],  // N – purple
-      [0xFF00BB,    0, NEON_Y,  EDGE,   18],  // S – magenta
-      [0xCC00EE, -EDGE, NEON_Y,    0,   15],  // W – purple
-      [0xFF00CC,  EDGE, NEON_Y,    0,   15],  // E – magenta
-      [0xDD00DD, -EDGE*0.65, NEON_Y, -EDGE*0.65, 8],
-      [0xDD00DD,  EDGE*0.65, NEON_Y, -EDGE*0.65, 8],
-      [0xDD00DD, -EDGE*0.65, NEON_Y,  EDGE*0.65, 8],
-      [0xDD00DD,  EDGE*0.65, NEON_Y,  EDGE*0.65, 8],
+      [0xBB00FF,    0, NEON_Y, -EDGE,   10],
+      [0xFF00BB,    0, NEON_Y,  EDGE,   10],
+      [0xCC00EE, -EDGE, NEON_Y,    0,    8],
+      [0xFF00CC,  EDGE, NEON_Y,    0,    8],
+      [0xDD00DD, -EDGE*0.65, NEON_Y, -EDGE*0.65, 4],
+      [0xDD00DD,  EDGE*0.65, NEON_Y, -EDGE*0.65, 4],
+      [0xDD00DD, -EDGE*0.65, NEON_Y,  EDGE*0.65, 4],
+      [0xDD00DD,  EDGE*0.65, NEON_Y,  EDGE*0.65, 4],
     ];
     for (const [color, x, y, z, intensity] of coveStrips) {
       const pl = new THREE.PointLight(color, intensity, 600, 1.4);
@@ -375,9 +374,9 @@ export class GameEngine {
 
     // Neon sign accent lights
     const signFills: [number, number, number, number, number][] = [
-      [0x00FF88, -280, 80, -200, 8],
-      [0xFF2090,  280, 80, -200, 8],
-      [0x4488FF,    0, 60,  260, 5],
+      [0x00FF88, -280, 80, -200, 5],
+      [0xFF2090,  280, 80, -200, 5],
+      [0x4488FF,    0, 60,  260, 3],
     ];
     for (const [color, x, y, z, intensity] of signFills) {
       const pl = new THREE.PointLight(color, intensity, 350, 1.5);
@@ -892,6 +891,7 @@ export class GameEngine {
     const dir: Vec2 = { x: Math.sin(shootAngle), z: Math.cos(shootAngle) };
     const vel = shotVelocity(dir, this.power);
     cueBall.vel = vel;
+    sound.cueStrike(this.power / 100);
 
     this.cueGroup.visible = false;
     this.setCam(this.camMode === 'overhead' ? 'overhead' : 'cinematic', false);
@@ -1102,10 +1102,14 @@ export class GameEngine {
           this.firstHit = hit;
         }
       };
-      const potted = stepPhysics(this.balls, dt, firstContact);
+      const onBallCollision = (impactSpeed: number) => sound.ballClick(impactSpeed);
+      const potted = stepPhysics(this.balls, dt, firstContact, onBallCollision);
       for (const n of potted) {
         if (n === 0) this.cuePottedInShot = true;
-        else if (!this.pottedInShot.includes(n)) this.pottedInShot.push(n);
+        else {
+          if (!this.pottedInShot.includes(n)) this.pottedInShot.push(n);
+          sound.pocketDrop();
+        }
       }
       if (allStopped(this.balls)) {
         this.onShotFinished();

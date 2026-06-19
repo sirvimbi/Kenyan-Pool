@@ -14,10 +14,12 @@ export function shotVelocity(dir: Vec2, power: number): Vec2 {
 export function stepPhysics(
   balls: BallState[],
   dt: number,
-  onFirstContact: (hitter: number, hit: number) => void
+  onFirstContact: (hitter: number, hit: number) => void,
+  onBallCollision?: (impactSpeed: number) => void
 ): number[] {
   const subDt = dt / SUBSTEPS;
   const pottedNow: number[] = [];
+  let collisionSounded = false; // fire at most once per stepPhysics call
 
   for (let s = 0; s < SUBSTEPS; s++) {
     const active = balls.filter(b => !b.isPotted);
@@ -77,6 +79,10 @@ export function stepPhysics(
             const imp = dot * BALL_COR;
             a.vel.x += imp * nx; a.vel.z += imp * nz;
             b2.vel.x -= imp * nx; b2.vel.z -= imp * nz;
+            if (!collisionSounded && onBallCollision) {
+              collisionSounded = true;
+              onBallCollision(Math.abs(dot));
+            }
           }
         }
       }
