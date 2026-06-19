@@ -438,25 +438,21 @@ export class GameEngine {
     const cy = CEIL_Y - STRIP_T * 0.5 - 1;
 
     // N wall (purple)
-    room.add(Object.assign(
-      new THREE.Mesh(new THREE.BoxGeometry(ROOM*2-10, STRIP_T, STRIP_D), ledPurple),
-      { position: new THREE.Vector3(0, cy, -(ROOM-STRIP_D*0.5)) }
-    ));
+    const stripN = new THREE.Mesh(new THREE.BoxGeometry(ROOM*2-10, STRIP_T, STRIP_D), ledPurple);
+    stripN.position.set(0, cy, -(ROOM - STRIP_D*0.5));
+    room.add(stripN);
     // S wall (magenta)
-    room.add(Object.assign(
-      new THREE.Mesh(new THREE.BoxGeometry(ROOM*2-10, STRIP_T, STRIP_D), ledMagenta),
-      { position: new THREE.Vector3(0, cy, ROOM-STRIP_D*0.5) }
-    ));
+    const stripS = new THREE.Mesh(new THREE.BoxGeometry(ROOM*2-10, STRIP_T, STRIP_D), ledMagenta);
+    stripS.position.set(0, cy, ROOM - STRIP_D*0.5);
+    room.add(stripS);
     // W wall (purple)
-    room.add(Object.assign(
-      new THREE.Mesh(new THREE.BoxGeometry(STRIP_D, STRIP_T, ROOM*2-10), ledPurple),
-      { position: new THREE.Vector3(-(ROOM-STRIP_D*0.5), cy, 0) }
-    ));
+    const stripW = new THREE.Mesh(new THREE.BoxGeometry(STRIP_D, STRIP_T, ROOM*2-10), ledPurple);
+    stripW.position.set(-(ROOM - STRIP_D*0.5), cy, 0);
+    room.add(stripW);
     // E wall (magenta)
-    room.add(Object.assign(
-      new THREE.Mesh(new THREE.BoxGeometry(STRIP_D, STRIP_T, ROOM*2-10), ledMagenta),
-      { position: new THREE.Vector3(ROOM-STRIP_D*0.5, cy, 0) }
-    ));
+    const stripE = new THREE.Mesh(new THREE.BoxGeometry(STRIP_D, STRIP_T, ROOM*2-10), ledMagenta);
+    stripE.position.set(ROOM - STRIP_D*0.5, cy, 0);
+    room.add(stripE);
 
     // ── Hanging LED bar fixtures above the table (warm white linear) ──
     const warmWhiteMat = new THREE.MeshBasicMaterial({ color: 0xFFF0D8 });
