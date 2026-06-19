@@ -307,7 +307,7 @@ export class GameEngine {
 
     // Reset balls
     this.balls = [
-      { number: 0, pos: { x: 0, z: -60 }, vel: { x:0, z:0 }, isPotted: false }
+      { number: 0, pos: { x: 0, z: -47 }, vel: { x:0, z:0 }, isPotted: false }
     ];
     for (const n of BALL_SEQUENCE) {
       const [x, z] = CUSHION_POSITIONS[n];
@@ -588,113 +588,196 @@ export class GameEngine {
     const feltMat = new THREE.MeshStandardMaterial({
       map: feltTex, roughness: 0.88, metalness: 0.0, color: 0x1A7238
     });
+    // DoubleSide so extruded cheek pieces are visible from all angles
     const cushMat = new THREE.MeshStandardMaterial({
-      color: 0x1A6530, roughness: 0.85
-    });
-    const rubberMat = new THREE.MeshStandardMaterial({
-      color: 0x113A1E, roughness: 0.72
+      color: 0x165028, roughness: 0.82, side: THREE.DoubleSide
     });
 
-    // Playing surface (felt)
-    const surf = new THREE.Mesh(
-      new THREE.PlaneGeometry(TABLE_W, TABLE_L),
-      feltMat
-    );
+    // ── Playing surface ───────────────────────────────────────────
+    const surf = new THREE.Mesh(new THREE.PlaneGeometry(TABLE_W, TABLE_L), feltMat);
     surf.rotation.x = -Math.PI/2;
     surf.receiveShadow = true;
     this.tableGroup.add(surf);
 
-    // Table frame sides (North/South/East/West rails)
-    const RailProfiles = [
-      // [sx, sy, sz, px, py, pz]  outer rail
-      [TABLE_W + CUSHION*4, TABLE_TH, CUSHION*1.2, 0, -TABLE_TH/2 + CUSHION*0.6, -(TABLE_L/2 + CUSHION)],
-      [TABLE_W + CUSHION*4, TABLE_TH, CUSHION*1.2, 0, -TABLE_TH/2 + CUSHION*0.6,  (TABLE_L/2 + CUSHION)],
-      [CUSHION*1.2, TABLE_TH, TABLE_L, -(TABLE_W/2 + CUSHION), -TABLE_TH/2 + CUSHION*0.6, 0],
-      [CUSHION*1.2, TABLE_TH, TABLE_L,  (TABLE_W/2 + CUSHION), -TABLE_TH/2 + CUSHION*0.6, 0],
-    ];
-    for (const [sx,sy,sz,px,py,pz] of RailProfiles) {
-      const r = new THREE.Mesh(new THREE.BoxGeometry(sx,sy,sz), woodMat.clone());
-      r.position.set(px, py, pz);
-      r.castShadow = true; r.receiveShadow = true;
+    // ── Cushion geometry constants ────────────────────────────────
+    const CD = CUSHION;                              // cushion depth = 5 cm
+    const CH = BALL_R * 1.82;                        // cushion height ≈ 5.2 cm (1⅞" + cloth)
+    const CY = CH / 2;                               // Y-centre for box geometry
+
+    // Pocket geometry (WPA 7-ft specs):
+    //   Side pocket 104° cut: each face at (180-104)/2 = 38° from ⊥ → taper = CD·tan38° ≈ 3.9 cm
+    //   Corner pocket   45° diagonal cut (simplified visual approximation)
+    const SH  = 6.5;                                 // side pocket half-mouth
+    const CC  = CD;                                  // corner clearance = CD → 45° cut
+    const ST  = CD * Math.tan(38 * Math.PI / 180);  // side taper depth ≈ 3.9 cm
+    const OVL = 1.5;                                 // cheek-to-segment overlap
+
+    // Helper: build an extruded polygon (defined by 3D XZ points) as a cushion piece.
+    // Extrudes upward by CH. shape Y = -(3D Z) so after rotateX(-PI/2): Y→up, shapeY→-Z.
+    const addCheek = (pts: [number,number][], mat: THREE.Material) => {
+      const shape = new THREE.Shape(
+        pts.map(([x, z]) => new THREE.Vector2(x, -z))
+      );
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        steps: 1, depth: CH, bevelEnabled: false
+      });
+      geo.rotateX(-Math.PI / 2);
+      this.tableGroup.add(new THREE.Mesh(geo, mat));
+    };
+
+    // ── Long rails (left x = −TW/2 ± CD, right x = +TW/2 ± CD) ─
+    for (const side of [-1, 1] as const) {
+      const IX = side * TABLE_W / 2;           // inner face X
+      const OX = side * (TABLE_W / 2 + CD);    // outer face X
+
+      // Main north segment: from z = -(TL/2 − CC) to z = -(SH + ST)
+      const northZ1 = -(TABLE_L / 2 - CC);
+      const northZ2 = -(SH + ST);
+      const segLen  = Math.abs(northZ2 - northZ1);
+      const segMidZ = (northZ1 + northZ2) / 2;
+      const segMidX = IX + side * CD / 2;
+
+      for (const zSign of [-1, 1] as const) {   // north (−1) and south (+1) segments
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(CD, CH, segLen), cushMat);
+        seg.position.set(segMidX, CY, zSign * Math.abs(segMidZ));
+        this.tableGroup.add(seg);
+      }
+
+      // Side-pocket cheeks (38° taper, each side of the pocket gap)
+      for (const pSign of [-1, 1] as const) {
+        // pocket face: inner at ±SH, outer at ±(SH+ST)
+        // back edge overlaps the main segment by OVL
+        const pts: [number,number][] =
+          side === -1
+            ? [  // left rail → CCW winding
+                [IX, pSign * SH],
+                [OX, pSign * (SH + ST)],
+                [OX, pSign * (SH + ST + OVL)],
+                [IX, pSign * (SH + OVL)],
+              ]
+            : [  // right rail → reversed for correct normals
+                [IX, pSign * (SH + OVL)],
+                [OX, pSign * (SH + ST + OVL)],
+                [OX, pSign * (SH + ST)],
+                [IX, pSign * SH],
+              ];
+        addCheek(pts, cushMat);
+      }
+
+      // Corner cheeks (45° triangular prism at each table corner)
+      for (const cSign of [-1, 1] as const) {
+        const triPts: [number,number][] =
+          side === -1
+            ? [
+                [IX, cSign * (TABLE_L / 2 - CC)],
+                [OX, cSign * (TABLE_L / 2 - CC)],
+                [OX, cSign * TABLE_L / 2],
+              ]
+            : [
+                [OX, cSign * TABLE_L / 2],
+                [OX, cSign * (TABLE_L / 2 - CC)],
+                [IX, cSign * (TABLE_L / 2 - CC)],
+              ];
+        addCheek(triPts, cushMat);
+      }
+    }
+
+    // ── Short rails (north z = −TL/2, south z = +TL/2) ───────────
+    for (const end of [-1, 1] as const) {
+      const IZ = end * TABLE_L / 2;
+      const OZ = end * (TABLE_L / 2 + CD);
+
+      // Main segment between the two corner clearances
+      const shortLen = TABLE_W - 2 * CC;
+      const sr = new THREE.Mesh(new THREE.BoxGeometry(shortLen, CH, CD), cushMat);
+      sr.position.set(0, CY, IZ + end * CD / 2);
+      this.tableGroup.add(sr);
+
+      // Corner cheeks (triangular prism at each end)
+      for (const cSide of [-1, 1] as const) {
+        const triPts: [number,number][] =
+          end === -1
+            ? [
+                [cSide * (TABLE_W / 2 - CC), IZ],
+                [cSide * (TABLE_W / 2 - CC), OZ],
+                [cSide * TABLE_W / 2,         OZ],
+              ]
+            : [
+                [cSide * TABLE_W / 2,         OZ],
+                [cSide * (TABLE_W / 2 - CC), OZ],
+                [cSide * (TABLE_W / 2 - CC), IZ],
+              ];
+        addCheek(triPts, cushMat);
+      }
+    }
+
+    // ── Outer wood rail frame ─────────────────────────────────────
+    const RAIL_W = CD + 4;
+    const railY  = -TABLE_TH / 2 + CD * 0.6;
+    const nsRail = () => new THREE.BoxGeometry(TABLE_W + RAIL_W * 2, TABLE_TH, RAIL_W);
+    const ewRail = () => new THREE.BoxGeometry(RAIL_W, TABLE_TH, TABLE_L + RAIL_W * 2);
+    for (const end of [-1, 1]) {
+      const r = new THREE.Mesh(nsRail(), woodMat.clone());
+      r.position.set(0, railY, end * (TABLE_L / 2 + RAIL_W / 2));
+      this.tableGroup.add(r);
+    }
+    for (const side of [-1, 1]) {
+      const r = new THREE.Mesh(ewRail(), woodMat.clone());
+      r.position.set(side * (TABLE_W / 2 + RAIL_W / 2), railY, 0);
       this.tableGroup.add(r);
     }
 
-    // Outer table body (below playing surface)
+    // Table body slab (below playing surface)
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(TABLE_W + CUSHION*4 + 4, 10, TABLE_L + CUSHION*4 + 4),
+      new THREE.BoxGeometry(TABLE_W + RAIL_W * 2 + 4, 10, TABLE_L + RAIL_W * 2 + 4),
       woodMat.clone()
     );
     body.position.set(0, -TABLE_TH - 5, 0);
-    body.castShadow = true;
     this.tableGroup.add(body);
 
-    // Cushions (rubber bumpers) — elevated slightly above felt
-    const cushionY = 1.5;
-    const cH = BALL_R * 1.6;
-    const cushDefs = [
-      // [geom: BoxGeometry(w,h,d), pos]
-      [TABLE_W*0.45, cH, CUSHION*0.9, -TABLE_W*0.04, cushionY, -(TABLE_L/2+CUSHION*0.45)],
-      [TABLE_W*0.45, cH, CUSHION*0.9,  TABLE_W*0.04, cushionY, -(TABLE_L/2+CUSHION*0.45)],
-      [TABLE_W*0.45, cH, CUSHION*0.9, -TABLE_W*0.04, cushionY,  (TABLE_L/2+CUSHION*0.45)],
-      [TABLE_W*0.45, cH, CUSHION*0.9,  TABLE_W*0.04, cushionY,  (TABLE_L/2+CUSHION*0.45)],
-      [CUSHION*0.9, cH, TABLE_L*0.45, -(TABLE_W/2+CUSHION*0.45), cushionY, -TABLE_L*0.13],
-      [CUSHION*0.9, cH, TABLE_L*0.45, -(TABLE_W/2+CUSHION*0.45), cushionY,  TABLE_L*0.13],
-      [CUSHION*0.9, cH, TABLE_L*0.45,  (TABLE_W/2+CUSHION*0.45), cushionY, -TABLE_L*0.13],
-      [CUSHION*0.9, cH, TABLE_L*0.45,  (TABLE_W/2+CUSHION*0.45), cushionY,  TABLE_L*0.13],
-    ];
-    for (const [w,h,d,px,py,pz] of cushDefs) {
-      const cm = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), rubberMat);
-      cm.position.set(px, py, pz);
-      this.tableGroup.add(cm);
-    }
-
-    // Pocket holes (dark circles on surface)
+    // ── Pocket holes (dark discs + leather rings) ─────────────────
     const pocketMat = new THREE.MeshBasicMaterial({ color: 0x020102 });
-    const pocketPositions = [
-      [-TABLE_W/2, TABLE_L/2], [TABLE_W/2, TABLE_L/2],
-      [-TABLE_W/2, 0],         [TABLE_W/2, 0],
-      [-TABLE_W/2,-TABLE_L/2], [TABLE_W/2,-TABLE_L/2],
+    const leatherMat = new THREE.MeshStandardMaterial({ color: 0x1A0A04, roughness: 0.6 });
+    const pocketDefs: [number, number, boolean][] = [
+      [-TABLE_W/2, -TABLE_L/2, true],  [-TABLE_W/2, 0, false],
+      [-TABLE_W/2,  TABLE_L/2, true],  [ TABLE_W/2,-TABLE_L/2, true],
+      [ TABLE_W/2, 0, false],           [ TABLE_W/2,  TABLE_L/2, true],
     ];
-    for (const [px,pz] of pocketPositions) {
-      const isCorner = pz !== 0;
-      const r = isCorner ? BALL_R*2.4 : BALL_R*2.8;
-      const hole = new THREE.Mesh(
-        new THREE.CircleGeometry(r, 24),
-        pocketMat
-      );
-      hole.rotation.x = -Math.PI/2;
+    for (const [px, pz, isCorner] of pocketDefs) {
+      const r = isCorner ? BALL_R * 2.02 : BALL_R * 2.27;
+      const hole = new THREE.Mesh(new THREE.CircleGeometry(r, 24), pocketMat);
+      hole.rotation.x = -Math.PI / 2;
       hole.position.set(px, 0.05, pz);
       this.tableGroup.add(hole);
-
-      // Leather pocket lining ring
-      const leatherRing = new THREE.Mesh(
-        new THREE.RingGeometry(r, r+2.5, 24),
-        new THREE.MeshStandardMaterial({ color:0x1A0A04, roughness:0.6 })
-      );
-      leatherRing.rotation.x = -Math.PI/2;
-      leatherRing.position.set(px, 0.1, pz);
-      this.tableGroup.add(leatherRing);
+      const ring = new THREE.Mesh(new THREE.RingGeometry(r, r + 2, 24), leatherMat);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(px, 0.1, pz);
+      this.tableGroup.add(ring);
     }
 
-    // Table legs — dark charcoal with subtle metallic sheen
+    // ── Table legs ────────────────────────────────────────────────
     const legMat = new THREE.MeshStandardMaterial({ color: 0x0E0A0A, roughness: 0.25, metalness: 0.55 });
-    const legPositions = [[-52,-52],[52,-52],[-52,52],[52,52]];
-    for (const [lx,lz] of legPositions) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(9, LEG_H, 9), legMat);
-      leg.position.set(lx, -(LEG_H/2 + TABLE_TH), lz);
-      leg.castShadow = true;
+    const legDefs: [number,number][] = [
+      [-TABLE_W/2 + 5, -(TABLE_L/2 - 5)],
+      [ TABLE_W/2 - 5, -(TABLE_L/2 - 5)],
+      [-TABLE_W/2 + 5,   TABLE_L/2 - 5],
+      [ TABLE_W/2 - 5,   TABLE_L/2 - 5],
+    ];
+    for (const [lx, lz] of legDefs) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(8, LEG_H, 8), legMat);
+      leg.position.set(lx, -(LEG_H / 2 + TABLE_TH), lz);
       this.tableGroup.add(leg);
     }
 
-    // Table skirt / apron between legs
+    // Aprons (skirt panels between legs)
     const apronMat = new THREE.MeshStandardMaterial({ color: 0x0B0808, roughness: 0.4, metalness: 0.3 });
-    const aprons = [
-      [TABLE_W - 8, 22, 6,  0,            -(LEG_H*0.6+TABLE_TH), -(TABLE_L/2+2)],
-      [TABLE_W - 8, 22, 6,  0,            -(LEG_H*0.6+TABLE_TH),  (TABLE_L/2+2)],
-      [6, 22, TABLE_L - 8, -(TABLE_W/2+2), -(LEG_H*0.6+TABLE_TH), 0],
-      [6, 22, TABLE_L - 8,  (TABLE_W/2+2), -(LEG_H*0.6+TABLE_TH), 0],
+    const apronDefs: [number,number,number,number,number,number][] = [
+      [TABLE_W - 10, 22, 6,  0,               -(LEG_H*0.6+TABLE_TH), -(TABLE_L/2+2)],
+      [TABLE_W - 10, 22, 6,  0,               -(LEG_H*0.6+TABLE_TH),  TABLE_L/2+2],
+      [6, 22, TABLE_L - 10, -(TABLE_W/2 + 2), -(LEG_H*0.6+TABLE_TH), 0],
+      [6, 22, TABLE_L - 10,  TABLE_W/2 + 2,   -(LEG_H*0.6+TABLE_TH), 0],
     ];
-    for (const [w,h,d,px,py,pz] of aprons) {
+    for (const [w,h,d,px,py,pz] of apronDefs) {
       const ap = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), apronMat);
       ap.position.set(px, py, pz);
       this.tableGroup.add(ap);

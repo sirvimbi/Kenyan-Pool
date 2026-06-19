@@ -5,35 +5,40 @@ export const BALL_SEQUENCE = [3,4,5,6,7,8,9,10,11,12,13,14,15];
 export const STARTING_BALANCE = 10000;
 export const TURN_DURATION = 60;
 
-// Table: WPA 9-foot, 50"×100" playing surface → ~127×254 cm
-export const TABLE_W = 127;
-export const TABLE_L = 254;
-export const BALL_R = 2.85;       // WPA ball 57mm diameter
-export const CUSHION = 5;
+// Table: 7-Foot (Bar/Home Standard) — 78" × 39" playing surface = 198 × 99 cm
+export const TABLE_W = 99;   // width  (short dimension)
+export const TABLE_L = 198;  // length (long  dimension)
+export const BALL_R  = 2.86; // 57.2 mm diameter / 2
+export const CUSHION = 5;    // rail cushion depth (cm)
 
-// Playable half-extents (ball centers)
-export const HW = TABLE_W/2 - CUSHION - BALL_R;
-export const HL = TABLE_L/2 - CUSHION - BALL_R;
+// Playable half-extents (ball centres must stay inside)
+export const HW = TABLE_W / 2 - CUSHION - BALL_R;   // ≈ 41.64
+export const HL = TABLE_L / 2 - CUSHION - BALL_R;   // ≈ 90.14
 
-// 6 standard pockets: 4 corners + 2 side centers
+// Pocket mouth widths (WPA spec):
+//   Corner: 4.5"–4.625" = 11.43–11.75 cm  → capture radius = 5.8 cm
+//   Side  : 5"–5.125"   = 12.7–13.01 cm   → capture radius = 6.5 cm
 export const POCKETS = [
-  { x: -TABLE_W/2, z: -TABLE_L/2, r: BALL_R*1.8 }, // corner
-  { x:  TABLE_W/2, z: -TABLE_L/2, r: BALL_R*1.8 }, // corner
-  { x: -TABLE_W/2, z:  0,         r: BALL_R*2.1 }, // side
-  { x:  TABLE_W/2, z:  0,         r: BALL_R*2.1 }, // side
-  { x: -TABLE_W/2, z:  TABLE_L/2, r: BALL_R*1.8 }, // corner
-  { x:  TABLE_W/2, z:  TABLE_L/2, r: BALL_R*1.8 }, // corner
+  { x: -TABLE_W/2, z: -TABLE_L/2, r: 5.8 },  // corner
+  { x:  TABLE_W/2, z: -TABLE_L/2, r: 5.8 },  // corner
+  { x: -TABLE_W/2, z:  0,         r: 6.5 },  // side
+  { x:  TABLE_W/2, z:  0,         r: 6.5 },  // side
+  { x: -TABLE_W/2, z:  TABLE_L/2, r: 5.8 },  // corner
+  { x:  TABLE_W/2, z:  TABLE_L/2, r: 5.8 },  // corner
 ];
 
-// Kenyan cushion layout: balls placed ON the rails
-const RX = TABLE_W/2 - CUSHION - BALL_R - 1;
-const RZ = TABLE_L/2 - CUSHION - BALL_R - 1;
+// Kenyan cushion layout: balls placed ON the rails (touching cushion face)
+const RX = TABLE_W/2 - CUSHION - BALL_R - 0.5;  // long-rail  ball centre x ≈ 41.14
+const RZ = TABLE_L/2 - CUSHION - BALL_R - 0.5;  // short-rail ball centre z ≈ 90.64
+
 export const CUSHION_POSITIONS: Record<number,[number,number]> = {
-  3:  [ 0,   0  ],
-  4:  [-32,  -RZ], 15: [ 32, -RZ],
-  6:  [-32,   RZ], 13: [ 32,  RZ],
-  7:  [-RX,  -84], 8: [-RX, -28], 11: [-RX, 28], 12: [-RX, 84],
-  9:  [ RX,  -84], 10:[ RX, -28], 14: [ RX, 28],  5: [ RX, 84],
+  3:  [ 0,    0  ],              // centre spot
+  // Short (end) rails — 2 balls each, spread ≈ TABLE_W/4
+  4:  [-24,  -RZ], 15: [ 24, -RZ],
+  6:  [-24,   RZ], 13: [ 24,  RZ],
+  // Long rails — 4 balls each, evenly spaced
+  7:  [-RX,  -65], 8: [-RX, -22], 11: [-RX, 22], 12: [-RX, 65],
+  9:  [ RX,  -65], 10:[ RX, -22], 14: [ RX, 22],  5: [ RX, 65],
 };
 
 export const BALL_COLORS: Record<number, string> = {
@@ -70,11 +75,11 @@ export interface PlayerState {
 }
 
 export type GamePhase =
-  | 'aiming'     // player rotates aim
-  | 'powering'   // holding mouse, charging power
-  | 'simulating' // balls moving
-  | 'evaluating' // brief pause showing result
-  | 'roundEnd';  // game over
+  | 'aiming'
+  | 'powering'
+  | 'simulating'
+  | 'evaluating'
+  | 'roundEnd';
 
 export interface ShotResult {
   type: 'success'|'carom'|'foul_wrong'|'foul_scratch'|'miss';
