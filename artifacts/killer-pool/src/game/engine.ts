@@ -586,7 +586,8 @@ export class GameEngine {
       map: woodTex, roughness: 0.35, metalness: 0.08, color: 0x0D0808
     });
     const feltMat = new THREE.MeshStandardMaterial({
-      map: feltTex, roughness: 0.88, metalness: 0.0, color: 0x1A7238
+      map: feltTex, roughness: 0.88, metalness: 0.0, color: 0x1A7238,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     });
     // DoubleSide so extruded cheek pieces are visible from all angles
     const cushMat = new THREE.MeshStandardMaterial({
@@ -610,33 +611,26 @@ export class GameEngine {
     const SH  = 6.5;                                 // side pocket half-mouth
     const CC  = CD;                                  // corner clearance = CD → 45° cut
     const ST  = CD * Math.tan(38 * Math.PI / 180);  // side taper depth ≈ 3.9 cm
-    const OVL = 1.5;                                 // cheek-to-segment overlap
 
-    // Helper: build an extruded polygon (defined by 3D XZ points) as a cushion piece.
-    // Extrudes upward by CH. shape Y = -(3D Z) so after rotateX(-PI/2): Y→up, shapeY→-Z.
-    const addCheek = (pts: [number,number][], mat: THREE.Material) => {
-      const shape = new THREE.Shape(
-        pts.map(([x, z]) => new THREE.Vector2(x, -z))
-      );
-      const geo = new THREE.ExtrudeGeometry(shape, {
-        steps: 1, depth: CH, bevelEnabled: false
-      });
+    // Helper: extrude a THREE.Shape upward by CH (shape Y = -(3D Z) convention).
+    const addCheekS = (shape: THREE.Shape, mat: THREE.Material) => {
+      const geo = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: CH, bevelEnabled: false });
       geo.rotateX(-Math.PI / 2);
       this.tableGroup.add(new THREE.Mesh(geo, mat));
     };
+
+    // Bezier constant for quarter-circle approximation
+    const KAPPA = 0.5523;
 
     // ── Long rails (left x = −TW/2 ± CD, right x = +TW/2 ± CD) ─
     for (const side of [-1, 1] as const) {
       const IX = side * TABLE_W / 2;           // inner face X
       const OX = side * (TABLE_W / 2 + CD);    // outer face X
 
-      // Each long rail = two straight segments with a clean gap at the side pocket.
-      // Segment span: from corner-clearance end to the pocket mouth (±SH).
-      // No separate cheek piece — the straight end IS the jaw face visible from the table.
-      const cornerZ  = TABLE_L / 2 - CC;    // inner face ends here near corner
-      const pocketZ  = SH;                  // inner face ends here near pocket (= physics capture radius)
-      const segLen   = cornerZ - pocketZ;   // ≈ 94 − 6.5 = 87.5 cm
-      const segMidZ  = (cornerZ + pocketZ) / 2;
+      // Straight segments: from corner-clearance to side-pocket mouth.
+      const cornerZ  = TABLE_L / 2 - CC;       // long rail ends here (corner clearance)
+      const segLen   = cornerZ - SH;            // segment length ≈ 87.5 cm
+      const segMidZ  = (cornerZ + SH) / 2;
       const segMidX  = IX + side * CD / 2;
 
       for (const zSign of [-1, 1] as const) {
@@ -645,52 +639,64 @@ export class GameEngine {
         this.tableGroup.add(seg);
       }
 
-      // Corner cheeks — 45° triangular prism at each corner pocket.
-      // Winding: CCW for left rail (side=-1), reversed for right rail (side=+1).
+      // ── Side pocket curved jaw pieces (one each side of the pocket gap) ──
+      // Each jaw tapers from the pocket mouth (z = ±SH) toward pocket centre (z = 0),
+      // with the inner face shaped as a smooth quadratic arc (matches reference diagram).
+      for (const pSign of [-1, 1] as const) {
+        // Shape coords: shapeX = 3D x, shapeY = −(3D z)
+        // pSign=+1 → north jaw; shapeY at mouth = −SH, at centre = 0
+        const jShape = new THREE.Shape();
+        jShape.moveTo(OX, -pSign * SH);                               // outer, mouth
+        jShape.lineTo(OX, 0);                                          // outer, centre
+        jShape.lineTo(IX + side * ST, 0);                              // inner deepest at centre
+        // Smooth arc back to inner face at mouth
+        jShape.quadraticCurveTo(
+          IX + side * ST * 0.3, -pSign * SH * 0.55,                   // control
+          IX, -pSign * SH,                                             // inner face at mouth
+        );
+        jShape.closePath();
+        addCheekS(jShape, cushMat);
+      }
+
+      // ── Corner pocket curved jaw pieces ──
+      // Replace sharp triangular prisms with a smooth bezier-arc jaw on the inner face.
+      // Each piece covers the gap between long-rail end and short-rail end.
       for (const cSign of [-1, 1] as const) {
-        const triPts: [number,number][] =
-          side === -1
-            ? [
-                [IX, cSign * cornerZ],
-                [OX, cSign * cornerZ],
-                [OX, cSign * TABLE_L / 2],
-              ]
-            : [
-                [OX, cSign * TABLE_L / 2],
-                [OX, cSign * cornerZ],
-                [IX, cSign * cornerZ],
-              ];
-        addCheek(triPts, cushMat);
+        // Shape Y = −(3D z) convention:
+        const cornerZ_s = -cSign * cornerZ;                  // long-rail inner end in shape Y
+        const IZ_s      = -cSign * (TABLE_L / 2);            // short-rail inner face in shape Y
+        const OZ_s      = -cSign * (TABLE_L / 2 + CD);       // short-rail outer face in shape Y
+
+        // Arc: from long-rail inner end A to short-rail inner end C
+        //   A = (IX,  cornerZ_s)
+        //   C = (IX − side·CC,  IZ_s)     (centre of arc in X is IX − side·CC)
+        // Cubic bezier approximates the quarter-circle (concave toward pocket):
+        //   CP1 = A + vertical tangent * KAPPA * CC
+        //   CP2 = C approached from the horizontal tangent direction
+        const cShape = new THREE.Shape();
+        cShape.moveTo(OX, cornerZ_s);                                   // B: outer, long-rail end
+        cShape.lineTo(IX,  cornerZ_s);                                   // A: inner, long-rail end
+        cShape.bezierCurveTo(
+          IX,                              cornerZ_s - cSign * KAPPA * CC,   // CP1
+          IX - side * CC * (1 - KAPPA),   IZ_s,                              // CP2
+          IX - side * CC,                  IZ_s,                              // C: inner, short-rail end
+        );
+        cShape.lineTo(OX, OZ_s);                                        // E: outer corner tip
+        cShape.closePath();
+        addCheekS(cShape, cushMat);
       }
     }
 
     // ── Short rails (north z = −TL/2, south z = +TL/2) ───────────
+    // Corner pieces are handled by the long-rail loop above; only main segments here.
     for (const end of [-1, 1] as const) {
       const IZ = end * TABLE_L / 2;
-      const OZ = end * (TABLE_L / 2 + CD);
 
       // Main segment between the two corner clearances
       const shortLen = TABLE_W - 2 * CC;
       const sr = new THREE.Mesh(new THREE.BoxGeometry(shortLen, CH, CD), cushMat);
       sr.position.set(0, CY, IZ + end * CD / 2);
       this.tableGroup.add(sr);
-
-      // Corner cheeks (triangular prism at each end)
-      for (const cSide of [-1, 1] as const) {
-        const triPts: [number,number][] =
-          end === -1
-            ? [
-                [cSide * (TABLE_W / 2 - CC), IZ],
-                [cSide * (TABLE_W / 2 - CC), OZ],
-                [cSide * TABLE_W / 2,         OZ],
-              ]
-            : [
-                [cSide * TABLE_W / 2,         OZ],
-                [cSide * (TABLE_W / 2 - CC), OZ],
-                [cSide * (TABLE_W / 2 - CC), IZ],
-              ];
-        addCheek(triPts, cushMat);
-      }
     }
 
     // ── Outer wood rail frame ─────────────────────────────────────
@@ -826,8 +832,8 @@ export class GameEngine {
 
     this.cueGroup.add(this.cueMesh);
 
-    // Aim guide line
-    const pts = [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-200)];
+    // Aim guide line — points in +Z (shot direction, toward mouse/target)
+    const pts = [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,200)];
     const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
     this.cueGhostLine = new THREE.Line(lineGeo,
       new THREE.LineBasicMaterial({ color:0xffffff, transparent:true, opacity:0.18 }));
@@ -849,17 +855,18 @@ export class GameEngine {
     this.cueGroup.visible = isActive;
     if (!isActive) return;
 
-    // Position group at cue ball — raised above cushion rail so stick clears the rubber
-    const cueY = BALL_R * 1.82 + 2.0;  // just above cushion top (CH ≈ BALL_R*1.82)
+    // Position group at cue ball centre height
+    const cueY = BALL_R;
     this.cueGroup.position.set(cueBall.pos.x, cueY, cueBall.pos.z);
-    // rotation.y = aimAngle → local +Z points toward mouse (aimAngle direction)
+    // rotation.y = aimAngle → local +Z points toward mouse/target
     this.cueGroup.rotation.y = this.aimAngle;
 
-    // Tip (narrow +Z end) sits at +tipDist from ball along aimAngle direction.
-    // Cylinder center = tipDist − CUE_LEN/2 (negative = butt hangs behind ball).
+    // Cue tip (narrow end, at local +Z) sits just behind the ball on the player side (−Z),
+    // with a small gap. Butt hangs in +Z direction (toward player / mouse position).
+    // cueMesh centre z = tipDist + CUE_LEN/2 (butt side), tip at tipDist from ball.
     const backswing = isPowering ? (this.power / 100) * 14 : 0;
-    const tipDist = BALL_R + 2 + backswing;
-    this.cueMesh.position.z = tipDist - CUE_LEN / 2;
+    const tipDist = BALL_R + 1.5 + backswing;
+    this.cueMesh.position.z = tipDist + CUE_LEN / 2;
   }
 
   // ── ball mesh sync ──
@@ -951,9 +958,8 @@ export class GameEngine {
     // Reset firstContactGiven flags
     for (const b of this.balls) { b.firstContactGiven = false; }
 
-    // Shoot direction: FROM mouse TOWARD ball → but ball travels AWAY from mouse
-    // aimAngle is FROM ball TOWARD mouse. Ball goes AWAY from mouse = opposite.
-    const shootAngle = this.aimAngle + Math.PI;
+    // aimAngle points FROM ball TOWARD mouse/target. Ball travels in that direction.
+    const shootAngle = this.aimAngle;
     const dir: Vec2 = { x: Math.sin(shootAngle), z: Math.cos(shootAngle) };
     const vel = shotVelocity(dir, this.power);
     cueBall.vel = vel;
@@ -1020,9 +1026,9 @@ export class GameEngine {
 
     const result = computeAIShot(cueBall, target, this.balls);
     this.power = result.power;
-    // Compute aimAngle from direction
+    // aimAngle = shoot direction (toward target), same convention as human aiming
     const angle = Math.atan2(result.direction.x, result.direction.z);
-    this.aimAngle = angle + Math.PI; // aimAngle = toward mouse = opposite of shoot dir
+    this.aimAngle = angle;
 
     this.executeShot();
   }
