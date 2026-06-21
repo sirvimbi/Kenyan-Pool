@@ -177,7 +177,9 @@ function TopBar({ hud }: { hud: HUDState }) {
   );
 }
 
-function CtrlBar({ hud, onCam, onSkip }: { hud: HUDState; onCam: ()=>void; onSkip: ()=>void }) {
+function CtrlBar({ hud, onCam, onSkip, onQuit }: {
+  hud: HUDState; onCam: ()=>void; onSkip: ()=>void; onQuit: ()=>void;
+}) {
   const isAiming = hud.phase==='aiming'||hud.phase==='powering';
   const isAITurn = hud.players[hud.currentPlayerIndex]?.isAI;
   return (
@@ -204,6 +206,22 @@ function CtrlBar({ hud, onCam, onSkip }: { hud: HUDState; onCam: ()=>void; onSki
         {!isAITurn && isAiming &&
           <button className="abtn sec" onClick={onSkip}>FORFEIT</button>
         }
+        <button className="abtn quit-btn" onClick={onQuit}>✕ QUIT</button>
+      </div>
+    </div>
+  );
+}
+
+function QuitDialog({ onStay, onLeave }: { onStay: ()=>void; onLeave: ()=>void }) {
+  return (
+    <div className="quit-overlay">
+      <div className="quit-box">
+        <div className="quit-title">Leave this game?</div>
+        <div className="quit-sub">Your progress will be lost.</div>
+        <div className="quit-actions">
+          <button className="quit-action-btn stay" onClick={onStay}>STAY</button>
+          <button className="quit-action-btn leave" onClick={onLeave}>LEAVE</button>
+        </div>
       </div>
     </div>
   );
@@ -230,10 +248,11 @@ interface RoundEndData {
   payout: { pool:number; fee:number; net:number; perWinner:number };
 }
 
-function RoundEndScreen({ data, onReplay, onMenu }: {
+function RoundEndScreen({ data, onReplay, onMenu, onChangeStakes }: {
   data: RoundEndData;
   onReplay: () => void;
   onMenu: () => void;
+  onChangeStakes: () => void;
 }) {
   const { players, winners, payout } = data;
   const isTie = winners.length > 1;
@@ -268,6 +287,7 @@ function RoundEndScreen({ data, onReplay, onMenu }: {
         </div>
         <div className="re-btns">
           <button className="re-btn play" onClick={onReplay}>PLAY AGAIN</button>
+          <button className="re-btn change" onClick={onChangeStakes}>CHANGE STAKES</button>
           <button className="re-btn quit" onClick={onMenu}>MENU</button>
         </div>
       </div>
@@ -313,6 +333,7 @@ export default function App() {
   const [hud, setHud] = useState<HUDState | null>(null);
   const [roundData, setRoundData] = useState<RoundEndData | null>(null);
   const [lastConfigs, setLastConfigs] = useState<{ configs: PlayerConfig[]; stake: number } | null>(null);
+  const [showQuitDialog, setShowQuitDialog] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
@@ -336,7 +357,6 @@ export default function App() {
     const canvas = canvasRef.current;
     const eng = engineRef.current;
     if (!canvas || !eng) return;
-    // Init on next tick so canvas is mounted
     setTimeout(() => {
       if (!eng['renderer']) eng.init(canvas);
     }, 50);
@@ -345,6 +365,7 @@ export default function App() {
   const handleStart = useCallback((configs: PlayerConfig[], stake: number) => {
     setLastConfigs({ configs, stake });
     setScreen('game');
+    setShowQuitDialog(false);
     const eng = engineRef.current;
     const canvas = canvasRef.current;
     if (!eng || !canvas) return;
@@ -357,6 +378,7 @@ export default function App() {
   const handleReplay = useCallback(() => {
     if (!lastConfigs) { setScreen('menu'); return; }
     setScreen('game');
+    setShowQuitDialog(false);
     setTimeout(() => {
       engineRef.current?.startGame(lastConfigs.configs, lastConfigs.stake);
     }, 80);
@@ -364,6 +386,16 @@ export default function App() {
 
   const handleMenu = useCallback(() => {
     setScreen('menu');
+    setShowQuitDialog(false);
+  }, []);
+
+  const handleChangeStakes = useCallback(() => {
+    setScreen('menu');
+    setShowQuitDialog(false);
+  }, []);
+
+  const handleQuitRequest = useCallback(() => {
+    setShowQuitDialog(true);
   }, []);
 
   return (
@@ -389,10 +421,17 @@ export default function App() {
             hud={hud}
             onCam={() => engineRef.current?.cycleCam()}
             onSkip={() => engineRef.current?.skipTurn()}
+            onQuit={handleQuitRequest}
           />
           <Notification hud={hud} />
           {(hud.phase === 'aiming' || hud.phase === 'powering') && (
             <BallLegend targetBall={hud.targetBall} />
+          )}
+          {showQuitDialog && (
+            <QuitDialog
+              onStay={() => setShowQuitDialog(false)}
+              onLeave={handleMenu}
+            />
           )}
         </div>
       )}
@@ -402,6 +441,7 @@ export default function App() {
           data={roundData}
           onReplay={handleReplay}
           onMenu={handleMenu}
+          onChangeStakes={handleChangeStakes}
         />
       )}
     </div>

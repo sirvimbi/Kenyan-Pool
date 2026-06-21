@@ -630,53 +630,35 @@ export class GameEngine {
       const IX = side * TABLE_W / 2;           // inner face X
       const OX = side * (TABLE_W / 2 + CD);    // outer face X
 
-      // Main north segment: from z = -(TL/2 − CC) to z = -(SH + ST)
-      const northZ1 = -(TABLE_L / 2 - CC);
-      const northZ2 = -(SH + ST);
-      const segLen  = Math.abs(northZ2 - northZ1);
-      const segMidZ = (northZ1 + northZ2) / 2;
-      const segMidX = IX + side * CD / 2;
+      // Each long rail = two straight segments with a clean gap at the side pocket.
+      // Segment span: from corner-clearance end to the pocket mouth (±SH).
+      // No separate cheek piece — the straight end IS the jaw face visible from the table.
+      const cornerZ  = TABLE_L / 2 - CC;    // inner face ends here near corner
+      const pocketZ  = SH;                  // inner face ends here near pocket (= physics capture radius)
+      const segLen   = cornerZ - pocketZ;   // ≈ 94 − 6.5 = 87.5 cm
+      const segMidZ  = (cornerZ + pocketZ) / 2;
+      const segMidX  = IX + side * CD / 2;
 
-      for (const zSign of [-1, 1] as const) {   // north (−1) and south (+1) segments
+      for (const zSign of [-1, 1] as const) {
         const seg = new THREE.Mesh(new THREE.BoxGeometry(CD, CH, segLen), cushMat);
-        seg.position.set(segMidX, CY, zSign * Math.abs(segMidZ));
+        seg.position.set(segMidX, CY, zSign * segMidZ);
         this.tableGroup.add(seg);
       }
 
-      // Side-pocket cheeks (38° taper, each side of the pocket gap)
-      for (const pSign of [-1, 1] as const) {
-        // pocket face: inner at ±SH, outer at ±(SH+ST)
-        // back edge overlaps the main segment by OVL
-        const pts: [number,number][] =
-          side === -1
-            ? [  // left rail → CCW winding
-                [IX, pSign * SH],
-                [OX, pSign * (SH + ST)],
-                [OX, pSign * (SH + ST + OVL)],
-                [IX, pSign * (SH + OVL)],
-              ]
-            : [  // right rail → reversed for correct normals
-                [IX, pSign * (SH + OVL)],
-                [OX, pSign * (SH + ST + OVL)],
-                [OX, pSign * (SH + ST)],
-                [IX, pSign * SH],
-              ];
-        addCheek(pts, cushMat);
-      }
-
-      // Corner cheeks (45° triangular prism at each table corner)
+      // Corner cheeks — 45° triangular prism at each corner pocket.
+      // Winding: CCW for left rail (side=-1), reversed for right rail (side=+1).
       for (const cSign of [-1, 1] as const) {
         const triPts: [number,number][] =
           side === -1
             ? [
-                [IX, cSign * (TABLE_L / 2 - CC)],
-                [OX, cSign * (TABLE_L / 2 - CC)],
+                [IX, cSign * cornerZ],
+                [OX, cSign * cornerZ],
                 [OX, cSign * TABLE_L / 2],
               ]
             : [
                 [OX, cSign * TABLE_L / 2],
-                [OX, cSign * (TABLE_L / 2 - CC)],
-                [IX, cSign * (TABLE_L / 2 - CC)],
+                [OX, cSign * cornerZ],
+                [IX, cSign * cornerZ],
               ];
         addCheek(triPts, cushMat);
       }
@@ -818,27 +800,28 @@ export class GameEngine {
     if (this.cueGroup) { this.scene.remove(this.cueGroup); }
     this.cueGroup = new THREE.Group();
 
-    // Cue body (tapered cylinder lying flat)
+    // Cue body — cylinder lying along local +Z so rotation.y = aimAngle lines it up.
+    // tip (narrow 0.35) at +Z, butt (wide 1.4) at −Z (behind ball, toward player).
     const cueGeo = new THREE.CylinderGeometry(0.35, 1.4, CUE_LEN, 12);
-    cueGeo.rotateZ(Math.PI/2); // lie along X axis
+    cueGeo.rotateX(Math.PI/2); // lie along Z axis
     const cueMat = new THREE.MeshStandardMaterial({ color:0xC89050, roughness:0.25, metalness:0.05 });
     this.cueMesh = new THREE.Mesh(cueGeo, cueMat);
     this.cueMesh.castShadow = true;
 
-    // Cue tip (blue chalk)
+    // Cue tip (blue chalk) — at +Z end of cylinder (the narrow/tip end)
     const tipGeo = new THREE.CylinderGeometry(0.34, 0.38, 2, 8);
-    tipGeo.rotateZ(Math.PI/2);
+    tipGeo.rotateX(Math.PI/2);
     const tip = new THREE.Mesh(tipGeo,
       new THREE.MeshStandardMaterial({ color:0x1A6080, roughness:0.6 }));
-    tip.position.x = CUE_LEN/2 + 1;
+    tip.position.z = CUE_LEN/2 + 1;
     this.cueMesh.add(tip);
 
-    // Wrap ring (decorative)
+    // Wrap ring (decorative) — near the butt (−Z) end
     const wrapGeo = new THREE.CylinderGeometry(1.6, 1.6, 8, 12);
-    wrapGeo.rotateZ(Math.PI/2);
+    wrapGeo.rotateX(Math.PI/2);
     const wrap = new THREE.Mesh(wrapGeo,
       new THREE.MeshStandardMaterial({ color:0x1A0A00, roughness:0.3 }));
-    wrap.position.x = -CUE_LEN/2 + 18;
+    wrap.position.z = -CUE_LEN/2 + 18;
     this.cueMesh.add(wrap);
 
     this.cueGroup.add(this.cueMesh);
@@ -866,17 +849,17 @@ export class GameEngine {
     this.cueGroup.visible = isActive;
     if (!isActive) return;
 
-    // Position group at cue ball
-    this.cueGroup.position.set(cueBall.pos.x, BALL_R, cueBall.pos.z);
-    // Rotate group around Y so local +X points FROM ball TOWARD mouse (aim direction)
+    // Position group at cue ball — raised above cushion rail so stick clears the rubber
+    const cueY = BALL_R * 1.82 + 2.0;  // just above cushion top (CH ≈ BALL_R*1.82)
+    this.cueGroup.position.set(cueBall.pos.x, cueY, cueBall.pos.z);
+    // rotation.y = aimAngle → local +Z points toward mouse (aimAngle direction)
     this.cueGroup.rotation.y = this.aimAngle;
 
-    // Offset the cue mesh so tip is near the ball
-    // Local +X is toward mouse after rotation
-    // We want tip at (BALL_R + 2 + backswing) in local +X
+    // Tip (narrow +Z end) sits at +tipDist from ball along aimAngle direction.
+    // Cylinder center = tipDist − CUE_LEN/2 (negative = butt hangs behind ball).
     const backswing = isPowering ? (this.power / 100) * 14 : 0;
     const tipDist = BALL_R + 2 + backswing;
-    this.cueMesh.position.x = tipDist + CUE_LEN / 2;
+    this.cueMesh.position.z = tipDist - CUE_LEN / 2;
   }
 
   // ── ball mesh sync ──

@@ -293,6 +293,33 @@ html, body, #root {
 .abtn.cam:hover  { background: rgba(255,255,255,0.14); }
 .abtn.sec  { background: rgba(232,48,40,0.1); color: var(--red); border: 1px solid rgba(232,48,40,0.25); }
 .abtn.sec:hover  { background: rgba(232,48,40,0.2); }
+.abtn.quit-btn { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.4); border: 1px solid rgba(255,255,255,0.1); }
+.abtn.quit-btn:hover { background: rgba(220,60,60,0.15); color: rgba(255,120,100,0.9); border-color: rgba(220,60,60,0.3); }
+
+/* Quit confirmation dialog */
+.quit-overlay {
+  position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,0.72);
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px);
+}
+.quit-box {
+  background: #141018; border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px; padding: 32px 36px; text-align: center;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.7);
+  min-width: 300px;
+}
+.quit-title { font-size: 22px; font-weight: 800; color: #fff; letter-spacing: 0.04em; }
+.quit-sub { font-size: 13px; color: rgba(255,255,255,0.4); margin-top: 6px; }
+.quit-actions { display: flex; gap: 12px; margin-top: 24px; }
+.quit-action-btn {
+  flex: 1; padding: 13px; border-radius: 10px; border: none; cursor: pointer;
+  font-size: 14px; font-weight: 800; letter-spacing: 0.06em; transition: all 0.18s;
+}
+.quit-action-btn.stay { background: linear-gradient(135deg,#C4900A,var(--gold,#D4A012)); color: #0A0600; }
+.quit-action-btn.stay:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(212,160,18,0.4); }
+.quit-action-btn.leave { background: rgba(220,50,40,0.15); color: rgba(255,120,100,0.9); border: 1px solid rgba(220,50,40,0.3); }
+.quit-action-btn.leave:hover { background: rgba(220,50,40,0.28); }
 
 /* Notification */
 #nz {
@@ -365,6 +392,8 @@ html, body, #root {
 .re-btn { flex: 1; padding: 12px; border-radius: 10px; border: none; cursor: pointer; font-size: 14px; font-weight: 800; letter-spacing: 0.06em; transition: all 0.2s; }
 .re-btn.play { background: linear-gradient(135deg, #C4900A, var(--gold)); color: #0A0600; }
 .re-btn.play:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(212,160,18,0.4); }
+.re-btn.change { background: rgba(212,160,18,0.08); color: var(--gold,#D4A012); border: 1px solid rgba(212,160,18,0.25); }
+.re-btn.change:hover { background: rgba(212,160,18,0.16); }
 .re-btn.quit { background: rgba(255,255,255,0.06); color: var(--text-dim); border: 1px solid var(--border); }
 .re-btn.quit:hover { background: rgba(255,255,255,0.1); }
 
