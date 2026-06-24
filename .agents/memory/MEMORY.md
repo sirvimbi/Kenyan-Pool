@@ -1,1 +1,2 @@
 - [WebGL-free geometry verification](webgl-free-geometry-check.md) — no WebGL in headless/preview browsers; verify 3D geometry by rendering a top-down SVG diagram to public/ and screenshotting it.
+- [Pool table felt/pocket depth ordering](pool-table-render.md) — felt uses negative polygonOffset (avoids z-fight with cushion bases); flat decals on it need a STRONGER negative offset or they get covered.

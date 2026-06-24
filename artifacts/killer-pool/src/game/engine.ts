@@ -689,8 +689,16 @@ export class GameEngine {
     this.tableGroup.add(body);
 
     // ── Pocket holes (dark discs + leather rings) ─────────────────
-    const pocketMat = new THREE.MeshBasicMaterial({ color: 0x020102 });
-    const leatherMat = new THREE.MeshStandardMaterial({ color: 0x1A0A04, roughness: 0.6 });
+    // Stronger negative polygonOffset than the felt (-2) so the holes always
+    // win the depth test and are never covered by the playing surface.
+    const pocketMat = new THREE.MeshBasicMaterial({
+      color: 0x020102,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    });
+    const leatherMat = new THREE.MeshStandardMaterial({
+      color: 0x1A0A04, roughness: 0.6,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    });
     const pocketDefs: [number, number, boolean][] = [
       [-TABLE_W/2, -TABLE_L/2, true],  [-TABLE_W/2, 0, false],
       [-TABLE_W/2,  TABLE_L/2, true],  [ TABLE_W/2,-TABLE_L/2, true],
