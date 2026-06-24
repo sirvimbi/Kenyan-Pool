@@ -126,15 +126,11 @@ function makeFeltTexture(): THREE.CanvasTexture {
       : `rgba(5,30,15,${0.05+Math.random()*0.07})`;
     ctx.fillRect(Math.random()*W, Math.random()*H, 1+Math.random(), 1+Math.random());
   }
-  // Subtle directional sheen
-  const g = ctx.createLinearGradient(0,0,W,H);
-  g.addColorStop(0,'rgba(255,255,255,0.06)');
-  g.addColorStop(0.5,'rgba(255,255,255,0.0)');
-  g.addColorStop(1,'rgba(0,0,0,0.1)');
-  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  // No directional gradient and no tiling: a repeated per-tile gradient/weave
+  // produces hard light/dark seams that read as a grid on the cloth.
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(4,8);
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   return t;
 }
 
