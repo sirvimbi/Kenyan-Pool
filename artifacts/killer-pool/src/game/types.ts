@@ -6,20 +6,19 @@ export const STARTING_BALANCE = 10000;
 export const TURN_DURATION = 60;
 
 // Table: 7-Foot (Bar/Home Standard) — 78" × 39" playing surface = 198 × 99 cm
-export const TABLE_W = 99;   // width  (short dimension)
-export const TABLE_L = 198;  // length (long  dimension)
-export const BALL_R  = 2.86; // 57.2 mm diameter / 2
-export const CUSHION = 5;    // rail cushion depth (cm)
+export const TABLE_W = 99.1;   // playing surface width  (nose-to-nose, short side)
+export const TABLE_L = 198.1;  // playing surface length (nose-to-nose, long side)
+export const BALL_R  = 2.86;   // 57.2 mm diameter / 2
+export const CUSHION = 5;      // cushion depth: nose → outer base (sits over the rail)
 
-// Play-area half-extents = cushion NOSE line (nose-to-nose / 2). The cushions sit
-// one CUSHION depth inward from the table edge, so the felt extends under them and
-// the pockets, noses and physics all share this single boundary.
-export const PW = TABLE_W / 2 - CUSHION;   // 44.5  nose half-width
-export const PL = TABLE_L / 2 - CUSHION;   // 94    nose half-length
+// Cushion NOSE line = edge of the rolling area; cushions extend outward over the
+// rails. Nose-to-nose rolling area is TABLE_W × TABLE_L = 99.1 × 198.1 cm (WPA 7ft).
+export const PW = TABLE_W / 2;   // 49.55  nose half-width
+export const PL = TABLE_L / 2;   // 99.05  nose half-length
 
 // Playable half-extents (ball centres must stay inside)
-export const HW = PW - BALL_R;   // ≈ 41.64
-export const HL = PL - BALL_R;   // ≈ 90.14
+export const HW = PW - BALL_R;   // ≈ 46.69
+export const HL = PL - BALL_R;   // ≈ 96.19
 
 // Pocket mouth widths (WPA spec):
 //   Corner: 4.5"–4.625" = 11.43–11.75 cm  → capture radius = 5.8 cm
