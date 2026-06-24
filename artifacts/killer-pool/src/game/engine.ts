@@ -635,15 +635,17 @@ export class GameEngine {
       const IX = side * TABLE_W / 2;           // inner (playing) face X
       const OX = side * (TABLE_W / 2 + CD);    // outer face X
       for (const zSign of [-1, 1] as const) {
-        const cornerZ  = zSign * (TABLE_L / 2 - Mc);        // inner nose near corner
-        const cornerOZ = zSign * (TABLE_L / 2 - Mc - CD);   // outer corner (45° mitre)
-        const sideZ    = zSign * Ms;                         // inner nose near side pocket
-        const sideOZ   = zSign * (Ms + Cs);                  // outer near side pocket (38° facing)
+        // Angled end faces tilt toward the table centre ("facing the game"):
+        // the inner (playing) edge is set back from each pocket, the outer edge runs to the mouth.
+        const cornerZin = zSign * (TABLE_L / 2 - Mc - CD);  // inner edge set back from corner
+        const cornerZout = zSign * (TABLE_L / 2 - Mc);      // outer corner (45° mitre) at mouth
+        const sideZin    = zSign * (Ms + Cs);               // inner edge set back from side pocket
+        const sideZout   = zSign * Ms;                       // outer edge at side-pocket mouth (38° facing)
         addPrism([
-          [IX, cornerZ],   // inner nose at corner mouth
-          [IX, sideZ],     // inner nose at side-pocket mouth
-          [OX, sideOZ],    // outer, side-pocket end
-          [OX, cornerOZ],  // outer, corner end
+          [IX, cornerZin],  // inner, corner end (set back)
+          [IX, sideZin],    // inner, side-pocket end (set back)
+          [OX, sideZout],   // outer nose at side-pocket mouth
+          [OX, cornerZout], // outer nose at corner mouth
         ], cushMat);
       }
     }
@@ -652,13 +654,13 @@ export class GameEngine {
     for (const end of [-1, 1] as const) {
       const iZ = end * TABLE_L / 2;            // inner (playing) face Z
       const oZ = end * (TABLE_L / 2 + CD);     // outer face Z
-      const innerX = TABLE_W / 2 - Mc;         // inner nose X at each corner
-      const outerX = TABLE_W / 2 - Mc - CD;    // outer corner X (45° mitre)
+      const innerX = TABLE_W / 2 - Mc - CD;    // inner edge set back from corners
+      const outerX = TABLE_W / 2 - Mc;         // outer nose at corner mouths (45° mitre)
       addPrism([
-        [-innerX, iZ],   // left inner nose
-        [ innerX, iZ],   // right inner nose
-        [ outerX, oZ],   // right outer corner
-        [-outerX, oZ],   // left outer corner
+        [-innerX, iZ],   // left inner edge (set back)
+        [ innerX, iZ],   // right inner edge (set back)
+        [ outerX, oZ],   // right outer nose at corner mouth
+        [-outerX, oZ],   // left outer nose at corner mouth
       ], cushMat);
     }
 
