@@ -11,25 +11,32 @@ export const TABLE_L = 198;  // length (long  dimension)
 export const BALL_R  = 2.86; // 57.2 mm diameter / 2
 export const CUSHION = 5;    // rail cushion depth (cm)
 
+// Play-area half-extents = cushion NOSE line (nose-to-nose / 2). The cushions sit
+// one CUSHION depth inward from the table edge, so the felt extends under them and
+// the pockets, noses and physics all share this single boundary.
+export const PW = TABLE_W / 2 - CUSHION;   // 44.5  nose half-width
+export const PL = TABLE_L / 2 - CUSHION;   // 94    nose half-length
+
 // Playable half-extents (ball centres must stay inside)
-export const HW = TABLE_W / 2 - CUSHION - BALL_R;   // ≈ 41.64
-export const HL = TABLE_L / 2 - CUSHION - BALL_R;   // ≈ 90.14
+export const HW = PW - BALL_R;   // ≈ 41.64
+export const HL = PL - BALL_R;   // ≈ 90.14
 
 // Pocket mouth widths (WPA spec):
 //   Corner: 4.5"–4.625" = 11.43–11.75 cm  → capture radius = 5.8 cm
 //   Side  : 5"–5.125"   = 12.7–13.01 cm   → capture radius = 6.5 cm
 export const POCKETS = [
-  { x: -TABLE_W/2, z: -TABLE_L/2, r: 5.8 },  // corner
-  { x:  TABLE_W/2, z: -TABLE_L/2, r: 5.8 },  // corner
-  { x: -TABLE_W/2, z:  0,         r: 6.5 },  // side
-  { x:  TABLE_W/2, z:  0,         r: 6.5 },  // side
-  { x: -TABLE_W/2, z:  TABLE_L/2, r: 5.8 },  // corner
-  { x:  TABLE_W/2, z:  TABLE_L/2, r: 5.8 },  // corner
+  { x: -PW, z: -PL, r: 5.8 },  // corner
+  { x:  PW, z: -PL, r: 5.8 },  // corner
+  { x: -PW, z:  0,  r: 6.5 },  // side
+  { x:  PW, z:  0,  r: 6.5 },  // side
+  { x: -PW, z:  PL, r: 5.8 },  // corner
+  { x:  PW, z:  PL, r: 5.8 },  // corner
 ];
 
-// Kenyan cushion layout: balls placed ON the rails (touching cushion face)
-const RX = TABLE_W/2 - CUSHION - BALL_R - 0.5;  // long-rail  ball centre x ≈ 41.14
-const RZ = TABLE_L/2 - CUSHION - BALL_R - 0.5;  // short-rail ball centre z ≈ 90.64
+// Kenyan cushion layout: balls placed ON the rails (ball edge exactly on the nose
+// line = bounce plane, so they touch the cushion face with no overlap).
+const RX = PW - BALL_R;  // long-rail  ball centre x = HW ≈ 41.64
+const RZ = PL - BALL_R;  // short-rail ball centre z = HL ≈ 90.14
 
 export const CUSHION_POSITIONS: Record<number,[number,number]> = {
   3:  [ 0,    0  ],              // centre spot

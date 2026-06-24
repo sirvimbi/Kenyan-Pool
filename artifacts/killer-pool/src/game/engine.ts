@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import {
   BallState, PlayerConfig, PlayerState, Vec2, ShotResult, HUDState, GamePhase,
   TABLE_W, TABLE_L, BALL_R, CUSHION, CUSHION_POSITIONS, BALL_SEQUENCE, BALL_COLORS,
-  BALL_VALUES, STARTING_BALANCE, TURN_DURATION, HW, HL
+  BALL_VALUES, STARTING_BALANCE, TURN_DURATION, HW, HL, PW, PL
 } from './types';
 import { stepPhysics, allStopped, shotVelocity } from './physics';
 import { sound } from './sound';
@@ -628,13 +628,13 @@ export class GameEngine {
 
     // ── Long rails: two mitred quad segments per side (split by the side pocket) ──
     for (const side of [-1, 1] as const) {
-      const IX = side * TABLE_W / 2;           // inner (playing) face X
-      const OX = side * (TABLE_W / 2 + CD);    // outer face X
+      const IX = side * PW;                    // inner (playing) face X = nose line
+      const OX = side * (PW + CD);             // outer face X = table edge
       for (const zSign of [-1, 1] as const) {
         // Angled end faces tilt toward the table centre ("facing the game"):
         // the inner (playing) edge is set back from each pocket, the outer edge runs to the mouth.
-        const cornerZin = zSign * (TABLE_L / 2 - Mc - CD);  // inner edge set back from corner
-        const cornerZout = zSign * (TABLE_L / 2 - Mc);      // outer corner (45° mitre) at mouth
+        const cornerZin = zSign * (PL - Mc - CD);  // inner edge set back from corner
+        const cornerZout = zSign * (PL - Mc);      // outer corner (45° mitre) at mouth
         const sideZin    = zSign * (Ms + Cs);               // inner edge set back from side pocket
         const sideZout   = zSign * Ms;                       // outer edge at side-pocket mouth (38° facing)
         addPrism([
@@ -648,10 +648,10 @@ export class GameEngine {
 
     // ── Short rails: one mitred quad per end (45° at both corners) ──
     for (const end of [-1, 1] as const) {
-      const iZ = end * TABLE_L / 2;            // inner (playing) face Z
-      const oZ = end * (TABLE_L / 2 + CD);     // outer face Z
-      const innerX = TABLE_W / 2 - Mc - CD;    // inner edge set back from corners
-      const outerX = TABLE_W / 2 - Mc;         // outer nose at corner mouths (45° mitre)
+      const iZ = end * PL;                     // inner (playing) face Z = nose line
+      const oZ = end * (PL + CD);              // outer face Z = table edge
+      const innerX = PW - Mc - CD;            // inner edge set back from corners
+      const outerX = PW - Mc;                 // outer nose at corner mouths (45° mitre)
       addPrism([
         [-innerX, iZ],   // left inner edge (set back)
         [ innerX, iZ],   // right inner edge (set back)
@@ -696,9 +696,9 @@ export class GameEngine {
       polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
     });
     const pocketDefs: [number, number, boolean][] = [
-      [-TABLE_W/2, -TABLE_L/2, true],  [-TABLE_W/2, 0, false],
-      [-TABLE_W/2,  TABLE_L/2, true],  [ TABLE_W/2,-TABLE_L/2, true],
-      [ TABLE_W/2, 0, false],           [ TABLE_W/2,  TABLE_L/2, true],
+      [-PW, -PL, true],  [-PW, 0, false],
+      [-PW,  PL, true],  [ PW,-PL, true],
+      [ PW, 0, false],   [ PW,  PL, true],
     ];
     for (const [px, pz, isCorner] of pocketDefs) {
       const r = isCorner ? BALL_R * 2.02 : BALL_R * 2.27;

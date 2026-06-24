@@ -1,7 +1,4 @@
-import { BallState, Vec2, BALL_R, TABLE_W, TABLE_L, CUSHION, POCKETS } from './types';
-
-const HW = TABLE_W/2 - CUSHION - BALL_R;
-const HL = TABLE_L/2 - CUSHION - BALL_R;
+import { BallState, Vec2, BALL_R, POCKETS, HW, HL } from './types';
 
 function dot(a: Vec2, b: Vec2) { return a.x*b.x + a.z*b.z; }
 function norm(v: Vec2): Vec2 { const d = Math.hypot(v.x, v.z)||1; return {x:v.x/d, z:v.z/d}; }
