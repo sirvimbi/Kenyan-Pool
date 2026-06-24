@@ -605,86 +605,61 @@ export class GameEngine {
     // ── Cushion geometry constants ────────────────────────────────
     const CD = CUSHION;                              // cushion depth = 5 cm
     const CH = BALL_R * 1.82;                        // cushion height ≈ 5.2 cm (1⅞" + cloth)
-    const CY = CH / 2;                               // Y-centre for box geometry
 
-    // Pocket geometry (WPA 7-ft specs):
-    //   Side pocket 104° cut: each face at (180-104)/2 = 38° from ⊥ → taper = CD·tan38° ≈ 3.9 cm
-    //   Corner pocket   angled chamfer facings pulled back behind the pocket hole
-    const SH  = 6.9;                                 // side pocket half-mouth (> side pocket radius so the nose clears the hole)
-    const CC  = 6.5;                                 // corner clearance (> corner pocket radius so noses clear the hole)
-    const ST  = CD * Math.tan(38 * Math.PI / 180);  // side taper depth ≈ 3.9 cm
-    const SE  = SH + ST;                             // side box-segment end (leaves room for the chamfer)
+    // Pocket cut-back geometry (matches reference top-down schematic):
+    //   Each cushion is a single extruded quad whose ends are mitred for the pockets,
+    //   so all six pocket holes stay fully open and clearly visible.
+    //   Corner: 45° mitre. Side: WPA ~104° cut → facing 38° from ⊥ (recede = CD·tan38°).
+    const Mc = 8;                                   // corner nose setback along each rail (> corner r 5.8)
+    const Ms = 9;                                   // side-pocket nose setback along rail (> side r 6.5)
+    const Cs = CD * Math.tan(38 * Math.PI / 180);   // side facing recede ≈ 3.9 cm
 
-    // Helper: extrude an angled chamfer triangle upward by CH.
-    // Points are given as 3D [x, z]; shape uses shapeY = −(3D z).
-    const addChamfer = (pts: [number, number][], mat: THREE.Material) => {
-      const shape = new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, -z)));
-      const geo = new THREE.ExtrudeGeometry(shape, { steps: 1, depth: CH, bevelEnabled: false });
+    // Helper: extrude a flat footprint polygon (3D [x, z] points) up by CH.
+    // The shape uses shapeY = −(3D z); rotateX(−90°) maps extrude depth → +Y.
+    // Winding is normalised to CCW so every prism's top cap faces +Y consistently.
+    const addPrism = (pts: [number, number][], mat: THREE.Material) => {
+      const v = pts.map(([x, z]) => new THREE.Vector2(x, -z));
+      let area = 0;
+      for (let i = 0; i < v.length; i++) {
+        const a = v[i], b = v[(i + 1) % v.length];
+        area += a.x * b.y - b.x * a.y;
+      }
+      if (area < 0) v.reverse();                     // enforce CCW → top cap normal +Y
+      const geo = new THREE.ExtrudeGeometry(new THREE.Shape(v), { steps: 1, depth: CH, bevelEnabled: false });
       geo.rotateX(-Math.PI / 2);
       this.tableGroup.add(new THREE.Mesh(geo, mat));
     };
 
-    // ── Long rails (left x = −TW/2 ± CD, right x = +TW/2 ± CD) ─
+    // ── Long rails: two mitred quad segments per side (split by the side pocket) ──
     for (const side of [-1, 1] as const) {
-      const IX = side * TABLE_W / 2;           // inner face X
+      const IX = side * TABLE_W / 2;           // inner (playing) face X
       const OX = side * (TABLE_W / 2 + CD);    // outer face X
-
-      // Straight segments: from corner-clearance to side-pocket chamfer.
-      const cornerZ  = TABLE_L / 2 - CC;       // long rail ends here (corner clearance)
-      const segLen   = cornerZ - SE;            // segment length
-      const segMidZ  = (cornerZ + SE) / 2;
-      const segMidX  = IX + side * CD / 2;
-
       for (const zSign of [-1, 1] as const) {
-        const seg = new THREE.Mesh(new THREE.BoxGeometry(CD, CH, segLen), cushMat);
-        seg.position.set(segMidX, CY, zSign * segMidZ);
-        this.tableGroup.add(seg);
-      }
-
-      // ── Side pocket angled chamfers (one each side of the pocket gap) ──
-      // Nose at (IX, ±SH) sits at the mouth; the facing angles back to the box end
-      // at (OX, ±SE), opening a funnel toward the pocket without covering it.
-      for (const pSign of [-1, 1] as const) {
-        addChamfer([
-          [IX, pSign * SH],   // inner nose at pocket mouth
-          [IX, pSign * SE],   // inner, box-segment end
-          [OX, pSign * SE],   // outer, box-segment end
-        ], cushMat);
-      }
-
-      // ── Corner pocket angled chamfers (long-rail side) ──
-      // Long-rail nose at (IX, ±cornerZ) angles back to the outer table corner,
-      // framing the pocket mouth without intruding into the hole.
-      for (const cSign of [-1, 1] as const) {
-        addChamfer([
-          [IX, cSign * cornerZ],          // inner nose
-          [OX, cSign * cornerZ],          // outer at nose z
-          [OX, cSign * (TABLE_L / 2)],    // outer corner
+        const cornerZ  = zSign * (TABLE_L / 2 - Mc);        // inner nose near corner
+        const cornerOZ = zSign * (TABLE_L / 2 - Mc - CD);   // outer corner (45° mitre)
+        const sideZ    = zSign * Ms;                         // inner nose near side pocket
+        const sideOZ   = zSign * (Ms + Cs);                  // outer near side pocket (38° facing)
+        addPrism([
+          [IX, cornerZ],   // inner nose at corner mouth
+          [IX, sideZ],     // inner nose at side-pocket mouth
+          [OX, sideOZ],    // outer, side-pocket end
+          [OX, cornerOZ],  // outer, corner end
         ], cushMat);
       }
     }
 
-    // ── Short rails (north z = −TL/2, south z = +TL/2) ───────────
+    // ── Short rails: one mitred quad per end (45° at both corners) ──
     for (const end of [-1, 1] as const) {
-      const IZ = end * TABLE_L / 2;             // inner face Z
-      const OZ = end * (TABLE_L / 2 + CD);      // outer face Z
-
-      // Main segment between the two corner clearances
-      const shortLen = TABLE_W - 2 * CC;
-      const sr = new THREE.Mesh(new THREE.BoxGeometry(shortLen, CH, CD), cushMat);
-      sr.position.set(0, CY, IZ + end * CD / 2);
-      this.tableGroup.add(sr);
-
-      // ── Corner pocket angled chamfers (short-rail side) ──
-      // Short-rail nose at (±(TW/2−CC), IZ) angles back to the outer table corner.
-      for (const cSide of [-1, 1] as const) {
-        const nx = cSide * (TABLE_W / 2 - CC);  // short-rail nose x
-        addChamfer([
-          [nx, IZ],                       // inner nose
-          [nx, OZ],                       // outer at nose x
-          [cSide * (TABLE_W / 2), OZ],    // outer corner
-        ], cushMat);
-      }
+      const iZ = end * TABLE_L / 2;            // inner (playing) face Z
+      const oZ = end * (TABLE_L / 2 + CD);     // outer face Z
+      const innerX = TABLE_W / 2 - Mc;         // inner nose X at each corner
+      const outerX = TABLE_W / 2 - Mc - CD;    // outer corner X (45° mitre)
+      addPrism([
+        [-innerX, iZ],   // left inner nose
+        [ innerX, iZ],   // right inner nose
+        [ outerX, oZ],   // right outer corner
+        [-outerX, oZ],   // left outer corner
+      ], cushMat);
     }
 
     // ── Outer wood rail frame ─────────────────────────────────────

@@ -1,0 +1,1 @@
+- [WebGL-free geometry verification](webgl-free-geometry-check.md) — no WebGL in headless/preview browsers; verify 3D geometry by rendering a top-down SVG diagram to public/ and screenshotting it.
