@@ -135,26 +135,97 @@ function makeFeltTexture(): THREE.CanvasTexture {
 }
 
 function makeFloorTexture(): THREE.CanvasTexture {
+  // Polished dark terrazzo that catches the neon — large glossy tiles with faint
+  // magenta/cyan reflection streaks so the floor reads as a wet-look bar floor
+  // instead of a flat dark moat around the table.
   const W = 512, H = 512;
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const ctx = c.getContext('2d')!;
-  ctx.fillStyle = '#1C1008'; ctx.fillRect(0,0,W,H);
-  const cols = 8, rows = 16;
-  const tw = W/cols, th = H/rows;
-  for (let r=0; r<rows; r++) {
-    for (let col=0; col<cols; col++) {
+  ctx.fillStyle = '#150c1e'; ctx.fillRect(0,0,W,H);
+  const n = 4, ts = W / n;
+  for (let r=0; r<n; r++) {
+    for (let col=0; col<n; col++) {
       const even = (r+col)%2===0;
-      const x = col*tw, y = r*th;
-      ctx.fillStyle = even ? '#231508' : '#1A100A';
-      ctx.fillRect(x+1, y+1, tw-2, th-2);
-      ctx.strokeStyle = 'rgba(100,60,20,0.15)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x+1, y+1, tw-2, th-2);
+      ctx.fillStyle = even ? '#1a1026' : '#140b1c';
+      ctx.fillRect(col*ts+1.5, r*ts+1.5, ts-3, ts-3);
     }
   }
+  // terrazzo speckle
+  for (let i=0;i<700;i++) {
+    const g = 40 + Math.random()*60;
+    ctx.fillStyle = `rgba(${g+Math.random()*40},${g},${g+Math.random()*50},0.25)`;
+    ctx.fillRect(Math.random()*W, Math.random()*H, 1.5, 1.5);
+  }
+  // neon reflection streaks
+  const streaks: [string, number][] = [['255,40,180', 0.10], ['80,200,255', 0.08], ['180,60,255', 0.07]];
+  for (const [rgb, a] of streaks) {
+    const sx = Math.random()*W;
+    const g = ctx.createLinearGradient(sx-40,0,sx+40,0);
+    g.addColorStop(0, `rgba(${rgb},0)`); g.addColorStop(0.5, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`);
+    ctx.fillStyle = g; ctx.fillRect(sx-40,0,80,H);
+  }
+  // grout seams
+  ctx.strokeStyle = 'rgba(180,120,255,0.10)'; ctx.lineWidth = 1.5;
+  for (let r=0; r<=n; r++) { ctx.beginPath(); ctx.moveTo(0,r*ts); ctx.lineTo(W,r*ts); ctx.stroke(); ctx.beginPath(); ctx.moveTo(r*ts,0); ctx.lineTo(r*ts,H); ctx.stroke(); }
   const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(6,6);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(3,3);
+  t.colorSpace = THREE.SRGBColorSpace;
   return t;
+}
+
+// Soft radial glow sprite — reused for the under-table light pool, bottle
+// backlights and drifting embers.
+function makeGlowTexture(rgb = '255,210,150', inner = 0.85): THREE.CanvasTexture {
+  const S = 256;
+  const c = document.createElement('canvas'); c.width = S; c.height = S;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(S/2,S/2,0,S/2,S/2,S/2);
+  g.addColorStop(0, `rgba(${rgb},${inner})`);
+  g.addColorStop(0.4, `rgba(${rgb},${inner*0.4})`);
+  g.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = g; ctx.fillRect(0,0,S,S);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+function makeDartTexture(): THREE.CanvasTexture {
+  const S = 256, c = document.createElement('canvas'); c.width = S; c.height = S;
+  const ctx = c.getContext('2d')!;
+  const cx = S/2, cy = S/2;
+  const rings = [110, 96, 70, 56, 16, 7];
+  const colsA = ['#181818', '#E8D8B0'];
+  for (let i = 0; i < rings.length; i++) {
+    ctx.beginPath(); ctx.arc(cx, cy, rings[i], 0, Math.PI*2);
+    ctx.fillStyle = i === rings.length-1 ? '#C81818'
+                  : i === rings.length-2 ? '#0E6E2E'
+                  : colsA[i % 2];
+    ctx.fill();
+  }
+  // wedge spokes
+  ctx.strokeStyle = 'rgba(120,120,120,0.5)'; ctx.lineWidth = 1;
+  for (let a = 0; a < 20; a++) {
+    const ang = (a/20)*Math.PI*2;
+    ctx.beginPath(); ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(ang)*110, cy + Math.sin(ang)*110); ctx.stroke();
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+
+function makeTVTexture(): THREE.CanvasTexture {
+  const W = 256, H = 160, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d')!;
+  // a tiny pool table broadcast
+  ctx.fillStyle = '#0a1a0c'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = '#13642f'; ctx.fillRect(20,24,W-40,H-44);
+  ctx.strokeStyle = '#3a1c0a'; ctx.lineWidth = 6; ctx.strokeRect(20,24,W-40,H-44);
+  const balls = [['#E8D010',70,70],['#CC0000',120,90],['#003399',150,60],['#FFFFFF',95,110]] as [string,number,number][];
+  for (const [col,x,y] of balls) { ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2); ctx.fillStyle = col; ctx.fill(); }
+  // scoreboard bar
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0,0,W,18);
+  ctx.fillStyle = '#FFB020'; ctx.font = 'bold 12px Arial'; ctx.textBaseline = 'middle';
+  ctx.fillText('LIVE  •  SIR VIMBI CUP', 6, 9);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 
 function makeSkylineTexture(): THREE.CanvasTexture {
@@ -259,6 +330,15 @@ export class GameEngine {
   private aiThinkTimeout: ReturnType<typeof setTimeout> | null = null;
   private evalTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  // ── environment animation ──
+  private envTime = 0;
+  private flickerSigns: { mat: THREE.Material & { opacity: number }; base: number; speed: number; phase: number }[] = [];
+  private embers?: THREE.Points;
+  private discoBall?: THREE.Object3D;
+  private ceilingFan?: THREE.Object3D;
+  private tvScreen?: { mat: THREE.MeshBasicMaterial };
+  private catEyes?: THREE.Object3D;
+
   // ── init ──
   init(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -273,8 +353,10 @@ export class GameEngine {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x060410);
-    this.scene.fog = new THREE.FogExp2(0x060410, 0.0012);
+    // Warm purple haze (not black) so the saloon reads all the way to the walls
+    // and the table area blends smoothly into the room instead of a dark moat.
+    this.scene.background = new THREE.Color(0x1a0e2a);
+    this.scene.fog = new THREE.FogExp2(0x1c1030, 0.0006);
 
     this.camera = new THREE.PerspectiveCamera(58, w/h, 0.5, 4000);
     this.camera.position.set(0, 280, 90);
@@ -381,6 +463,18 @@ export class GameEngine {
       pl.position.set(x, y, z);
       this.scene.add(pl);
     }
+
+    // ── Floor-level warm wash around the table — lifts the dark moat so the
+    //    bright table blends smoothly down onto the saloon floor ──
+    const FLOOR_LVL = -(LEG_H + TABLE_TH) + 12;
+    const floorWash: [number, number][] = [
+      [0, -120], [0, 120], [-120, 0], [120, 0], [-120, -120], [120, 120],
+    ];
+    for (const [x, z] of floorWash) {
+      const pl = new THREE.PointLight(0xFF9C5A, 55, 320, 1.8);
+      pl.position.set(x, FLOOR_LVL, z);
+      this.scene.add(pl);
+    }
   }
 
   private buildRoom() {
@@ -390,16 +484,28 @@ export class GameEngine {
     const FLOOR_Y = -(LEG_H + TABLE_TH);
     const WALL_H = CEIL_Y - FLOOR_Y;
 
-    // ── Floor ────────────────────────────────────────────────
+    // ── Floor — polished, neon-reflective ─────────────────────
     const floorTex = makeFloorTexture();
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(ROOM*2.2, ROOM*2.2),
-      new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.88, metalness: 0.04 })
+      new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.34, metalness: 0.55, color: 0x9988aa })
     );
     floor.rotation.x = -Math.PI/2;
     floor.position.y = FLOOR_Y;
     floor.receiveShadow = true;
     room.add(floor);
+
+    // Warm light-pool that ties the lit table down onto the floor (kills the moat)
+    const pool = new THREE.Mesh(
+      new THREE.PlaneGeometry(440, 540),
+      new THREE.MeshBasicMaterial({
+        map: makeGlowTexture('255,180,110', 0.55), transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      })
+    );
+    pool.rotation.x = -Math.PI/2;
+    pool.position.set(0, FLOOR_Y + 0.6, 0);
+    room.add(pool);
 
     // ── Ceiling — very dark ───────────────────────────────────
     const ceiling = new THREE.Mesh(
@@ -419,19 +525,19 @@ export class GameEngine {
     ];
     for (const { pos, ry } of wallDefs) {
       const midY = FLOOR_Y + WALL_H * 0.5;
-      // Lower warm panel (like image 1 — amber/brown under neon strip)
+      // Lower warm panel (amber/brown under neon strip)
       const lower = new THREE.Mesh(
         new THREE.PlaneGeometry(ROOM*2.1, WALL_H * 0.52),
-        new THREE.MeshStandardMaterial({ color: 0x1C0D06, roughness: 0.9 })
+        new THREE.MeshStandardMaterial({ color: 0x2E160B, roughness: 0.85 })
       );
       lower.rotation.y = ry;
       lower.position.set(pos[0], FLOOR_Y + WALL_H * 0.26, pos[2]);
       room.add(lower);
 
-      // Upper dark panel
+      // Upper panel — deep plum, lifts out of pure black
       const upper = new THREE.Mesh(
         new THREE.PlaneGeometry(ROOM*2.1, WALL_H * 0.5),
-        new THREE.MeshStandardMaterial({ color: 0x08060F, roughness: 0.95 })
+        new THREE.MeshStandardMaterial({ color: 0x140A1E, roughness: 0.92 })
       );
       upper.rotation.y = ry;
       upper.position.set(pos[0], midY + WALL_H * 0.26, pos[2]);
@@ -509,14 +615,14 @@ export class GameEngine {
 
     // ── Neon signs ────────────────────────────────────────────
     this.addNeonSign(room, 'KILLER POOL',   -165, FLOOR_Y + WALL_H*0.82, -ROOM+2, 0x00FF88, 1.2);
-    this.addNeonSign(room, 'NAIROBI NIGHTS', 155, FLOOR_Y + WALL_H*0.78, -ROOM+2, 0xFF2090, 0.9);
+    this.addNeonSign(room, 'NAIROBI NIGHTS', 155, FLOOR_Y + WALL_H*0.78, -ROOM+2, 0xFF2090, 0.9, 0, true);
     this.addNeonSign(room, 'BILLIARDS',      -ROOM+2, FLOOR_Y+WALL_H*0.42, 0, 0x44AAFF, 1.0, Math.PI/2);
 
     // ── Bar counter + stools (south wall) ─────────────────────
     const barY = FLOOR_Y + 56;
     const barTop = new THREE.Mesh(
       new THREE.BoxGeometry(320, 6, 55),
-      new THREE.MeshStandardMaterial({ color:0x140804, roughness:0.3, metalness:0.15 })
+      new THREE.MeshStandardMaterial({ color:0x140804, roughness:0.18, metalness:0.35 })
     );
     barTop.position.set(0, barY, ROOM - 58);
     room.add(barTop);
@@ -526,6 +632,13 @@ export class GameEngine {
     );
     barFront.position.set(0, barY - 33, ROOM - 35);
     room.add(barFront);
+    // Under-bar neon kick strip
+    const kick = new THREE.Mesh(
+      new THREE.BoxGeometry(312, 2.5, 2),
+      new THREE.MeshBasicMaterial({ color: 0xFF2090 })
+    );
+    kick.position.set(0, barY - 58, ROOM - 31);
+    room.add(kick);
 
     for (let sx = -2; sx <= 2; sx++) {
       const stool = new THREE.Group();
@@ -543,14 +656,229 @@ export class GameEngine {
       room.add(stool);
     }
 
+    // ── Hero neon: the house name over the backbar (flickers like real neon) ──
+    this.addNeonSign(room, 'SIR VIMBI ENTERPRISES', 0, FLOOR_Y + WALL_H*0.62, ROOM - 4, 0xFFB020, 1.5, Math.PI, true);
+    this.addNeonSign(room, '~ est. Nairobi ~', 0, FLOOR_Y + WALL_H*0.50, ROOM - 4, 0x39D0FF, 0.7, Math.PI);
+
+    // ── Backbar, patrons & deeper saloon detail ──
+    this.buildBackBar(room, FLOOR_Y, ROOM, barY);
+    this.buildDecor(room, ROOM, FLOOR_Y, WALL_H, CEIL_Y);
+    this.buildAtmosphere(room, FLOOR_Y, CEIL_Y);
+
     this.scene.add(room);
   }
 
+  // ── Backbar: lit liquor shelves, bartender silhouette, resident cat ──
+  private buildBackBar(room: THREE.Object3D, FLOOR_Y: number, ROOM: number, barY: number) {
+    const backZ = ROOM - 10;
+    // Dark cabinet behind the bar
+    const cabinet = new THREE.Mesh(
+      new THREE.BoxGeometry(300, 150, 14),
+      new THREE.MeshStandardMaterial({ color: 0x100309, roughness: 0.6 })
+    );
+    cabinet.position.set(0, FLOOR_Y + 90, backZ + 4);
+    room.add(cabinet);
+    // Backlight glow panel behind the bottles
+    const back = new THREE.Mesh(
+      new THREE.PlaneGeometry(290, 96),
+      new THREE.MeshBasicMaterial({ map: makeGlowTexture('255,120,40', 0.5), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+    );
+    back.position.set(0, FLOOR_Y + 96, backZ - 3.5);
+    back.rotation.y = Math.PI;
+    room.add(back);
+
+    const shelfMat = new THREE.MeshStandardMaterial({ color: 0x1A0D06, roughness: 0.4, metalness: 0.2 });
+    const bottlePalette = [0x00E0A0, 0xFF3070, 0x40A0FF, 0xFFC020, 0xC060FF, 0xFF6020, 0xE8E8E8];
+    for (let s = 0; s < 3; s++) {
+      const sy = FLOOR_Y + 60 + s * 32;
+      const shelf = new THREE.Mesh(new THREE.BoxGeometry(280, 2, 12), shelfMat);
+      shelf.position.set(0, sy, backZ - 2);
+      room.add(shelf);
+      for (let b = 0; b < 16; b++) {
+        const col = bottlePalette[(b + s) % bottlePalette.length];
+        const h = 12 + ((b * 7 + s * 5) % 9);
+        const bottle = new THREE.Mesh(
+          new THREE.CylinderGeometry(1.6, 2.0, h, 8),
+          new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.5, roughness: 0.25, transparent: true, opacity: 0.9 })
+        );
+        bottle.position.set(-135 + b * 18, sy + h / 2 + 1, backZ - 2);
+        room.add(bottle);
+        const neck = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.6, 0.6, 4, 6),
+          new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.4 })
+        );
+        neck.position.set(-135 + b * 18, sy + h + 3, backZ - 2);
+        room.add(neck);
+      }
+    }
+
+    // Bartender silhouette tending the bar
+    const bartender = new THREE.Group();
+    const silMat = new THREE.MeshStandardMaterial({ color: 0x05020a, roughness: 1 });
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(7, 22, 4, 8), silMat);
+    torso.position.y = 30; bartender.add(torso);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(6, 12, 12), silMat);
+    head.position.y = 48; bartender.add(head);
+    bartender.position.set(40, barY - 56, ROOM - 78);
+    room.add(bartender);
+
+    // Resident cat on the bar top — two glowing eyes if you look (easter egg)
+    const cat = new THREE.Group();
+    const catMat = new THREE.MeshStandardMaterial({ color: 0x07060a, roughness: 1 });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(3, 6, 3, 6), catMat);
+    body.rotation.z = Math.PI / 2; body.position.y = 3; cat.add(body);
+    const catHead = new THREE.Mesh(new THREE.SphereGeometry(3, 10, 10), catMat);
+    catHead.position.set(5, 5, 0); cat.add(catHead);
+    for (const ex of [-1.2, 1.2]) {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(1.2, 2.4, 4), catMat);
+      ear.position.set(5 + ex * 0.4, 8, ex); cat.add(ear);
+    }
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0x9CFF3C });
+    const eyes = new THREE.Group();
+    for (const ez of [-1.1, 1.1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.6, 6, 6), eyeMat);
+      eye.position.set(7.2, 5.2, ez); eyes.add(eye);
+    }
+    cat.add(eyes);
+    cat.position.set(-120, barY + 3, ROOM - 60);
+    room.add(cat);
+    this.catEyes = eyes;
+  }
+
+  // ── Wall life: patrons, plants, dartboard, TV, framed photos, disco ball ──
+  private buildDecor(room: THREE.Object3D, ROOM: number, FLOOR_Y: number, WALL_H: number, CEIL_Y: number) {
+    const silMat = new THREE.MeshStandardMaterial({ color: 0x06030c, roughness: 1 });
+    // Patrons perched on the bar stools (south wall)
+    for (const sx of [-2, 0, 1]) {
+      const p = new THREE.Group();
+      const torso = new THREE.Mesh(new THREE.CapsuleGeometry(6, 18, 4, 8), silMat.clone());
+      torso.position.y = 26; p.add(torso);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(5.2, 12, 12), silMat.clone());
+      head.position.y = 42; p.add(head);
+      p.position.set(sx * 62, FLOOR_Y + 18, ROOM - 65);
+      p.rotation.y = Math.PI;
+      room.add(p);
+    }
+
+    // Hanging plants in the corners (Nairobi greenery)
+    for (const [px, pz] of [[-ROOM+50, -ROOM+50], [ROOM-50, -ROOM+50], [-ROOM+50, ROOM-90]] as [number,number][]) {
+      const plant = new THREE.Group();
+      const pot = new THREE.Mesh(
+        new THREE.CylinderGeometry(7, 5, 10, 10),
+        new THREE.MeshStandardMaterial({ color: 0x2A1408, roughness: 0.8 })
+      );
+      plant.add(pot);
+      const leafMat = new THREE.MeshStandardMaterial({ color: 0x1E5E2A, roughness: 0.8, side: THREE.DoubleSide });
+      for (let i = 0; i < 9; i++) {
+        const leaf = new THREE.Mesh(new THREE.ConeGeometry(2.2, 22, 4), leafMat);
+        const a = (i / 9) * Math.PI * 2;
+        leaf.position.set(Math.cos(a) * 4, 14, Math.sin(a) * 4);
+        leaf.rotation.set(Math.cos(a) * 0.6, 0, -Math.sin(a) * 0.6);
+        plant.add(leaf);
+      }
+      plant.position.set(px, FLOOR_Y + 60, pz);
+      room.add(plant);
+      // hanging cord
+      const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, CEIL_Y - (FLOOR_Y + 70), 4),
+        new THREE.MeshStandardMaterial({ color: 0x1a1a1a }));
+      cord.position.set(px, (CEIL_Y + FLOOR_Y + 70) / 2, pz);
+      room.add(cord);
+    }
+
+    // Dartboard on the west wall
+    const dart = new THREE.Mesh(
+      new THREE.CircleGeometry(16, 24),
+      new THREE.MeshBasicMaterial({ map: makeDartTexture() })
+    );
+    dart.position.set(-ROOM + 2, FLOOR_Y + WALL_H * 0.42, -150);
+    dart.rotation.y = Math.PI / 2;
+    room.add(dart);
+
+    // Glowing TV on the east wall showing a looping "match"
+    const tvMat = new THREE.MeshBasicMaterial({ map: makeTVTexture() });
+    const tv = new THREE.Mesh(new THREE.PlaneGeometry(70, 42), tvMat);
+    tv.position.set(ROOM - 2, FLOOR_Y + WALL_H * 0.55, 120);
+    tv.rotation.y = -Math.PI / 2;
+    room.add(tv);
+    const tvFrame = new THREE.Mesh(
+      new THREE.BoxGeometry(4, 50, 78),
+      new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.4, metalness: 0.6 })
+    );
+    tvFrame.position.set(ROOM - 4, FLOOR_Y + WALL_H * 0.55, 120);
+    room.add(tvFrame);
+    this.tvScreen = { mat: tvMat };
+
+    // Framed photos along the lower west wall (subtle wall of fame)
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.4, metalness: 0.5 });
+    const photoCols = [0x6688aa, 0xaa8866, 0x88aa66];
+    for (let i = 0; i < 3; i++) {
+      const fr = new THREE.Mesh(new THREE.BoxGeometry(2, 26, 20), frameMat);
+      fr.position.set(-ROOM + 2, FLOOR_Y + WALL_H * 0.34, 40 + i * 40);
+      room.add(fr);
+      const photo = new THREE.Mesh(
+        new THREE.PlaneGeometry(16, 22),
+        new THREE.MeshStandardMaterial({ color: photoCols[i], roughness: 0.6, emissive: photoCols[i], emissiveIntensity: 0.08 })
+      );
+      photo.position.set(-ROOM + 3.2, FLOOR_Y + WALL_H * 0.34, 40 + i * 40);
+      photo.rotation.y = Math.PI / 2;
+      room.add(photo);
+    }
+
+    // Slow-turning disco ball high over the room (catches the eye only in motion)
+    const disco = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(11, 1),
+      new THREE.MeshStandardMaterial({ color: 0xC0C8D0, roughness: 0.15, metalness: 1, flatShading: true })
+    );
+    disco.position.set(150, CEIL_Y - 70, 150);
+    room.add(disco);
+    const dcord = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 60, 4),
+      new THREE.MeshStandardMaterial({ color: 0x1a1a1a }));
+    dcord.position.set(150, CEIL_Y - 30, 150);
+    room.add(dcord);
+    this.discoBall = disco;
+
+    // Slow ceiling fan over the lounge (only noticed by the patient)
+    const fan = new THREE.Group();
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 3, 10),
+      new THREE.MeshStandardMaterial({ color: 0x0c0c0c, roughness: 0.4, metalness: 0.6 }));
+    fan.add(hub);
+    const bladeMat = new THREE.MeshStandardMaterial({ color: 0x1a0e06, roughness: 0.7 });
+    for (let i = 0; i < 4; i++) {
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(34, 0.8, 7), bladeMat);
+      blade.position.set(Math.cos(i * Math.PI / 2) * 19, 0, Math.sin(i * Math.PI / 2) * 19);
+      blade.rotation.y = i * Math.PI / 2;
+      fan.add(blade);
+    }
+    fan.position.set(-150, CEIL_Y - 24, 150);
+    room.add(fan);
+    this.ceilingFan = fan;
+  }
+
+  // ── Drifting embers / dust motes catching the neon (ambient life) ──
+  private buildAtmosphere(room: THREE.Object3D, FLOOR_Y: number, CEIL_Y: number) {
+    const N = 140;
+    const pos = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      pos[i*3]   = (Math.random() - 0.5) * 760;
+      pos[i*3+1] = FLOOR_Y + Math.random() * (CEIL_Y - FLOOR_Y);
+      pos[i*3+2] = (Math.random() - 0.5) * 760;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({
+      size: 3.2, map: makeGlowTexture('255,200,140', 0.9), transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.7,
+    });
+    const pts = new THREE.Points(geo, mat);
+    room.add(pts);
+    this.embers = pts;
+  }
+
   private addNeonSign(
-    parent: THREE.Group, text: string,
+    parent: THREE.Object3D, text: string,
     x: number, y: number, z: number,
-    color: number, scale = 1, rotY = 0
-  ) {
+    color: number, scale = 1, rotY = 0, flicker = false
+  ): THREE.Mesh {
     const W = Math.max(120, text.length * 18) * scale;
     const H = 28 * scale;
     const c = document.createElement('canvas');
@@ -573,6 +901,8 @@ export class GameEngine {
     mesh.position.set(x, y, z);
     if (rotY) mesh.rotation.y = rotY;
     parent.add(mesh);
+    if (flicker) this.flickerSigns.push({ mat, base: 1, speed: 6 + Math.random()*4, phase: Math.random()*6.28 });
+    return mesh;
   }
 
   private buildTable() {
@@ -1266,10 +1596,49 @@ export class GameEngine {
     );
     this.camera.lookAt(this.camTargetLook);
 
+    this.updateEnvironment(dt);
     this.syncBallMeshes();
     this.updateCue();
     this.renderer.render(this.scene, this.camera);
   };
+
+  private updateEnvironment(dt: number) {
+    this.envTime += dt;
+    const t = this.envTime;
+
+    // Neon flicker — mostly steady with occasional brown-out dips
+    for (const s of this.flickerSigns) {
+      const wobble = 0.88 + 0.12 * Math.sin(t * s.speed + s.phase);
+      const dip = Math.sin(t * 17 + s.phase) > 0.985 ? 0.45 : 1;
+      s.mat.opacity = s.base * wobble * dip;
+    }
+
+    // Disco ball + ceiling fan slow spin
+    if (this.discoBall) this.discoBall.rotation.y += dt * 0.5;
+    if (this.ceilingFan) this.ceilingFan.rotation.y += dt * 0.9;
+
+    // Cat eyes blink (look closely)
+    if (this.catEyes) {
+      this.catEyes.scale.y = Math.sin(t * 0.7) > 0.97 ? 0.15 : 1;
+    }
+
+    // TV faint static flicker
+    if (this.tvScreen) {
+      this.tvScreen.mat.color.setScalar(0.85 + 0.15 * Math.abs(Math.sin(t * 9)));
+    }
+
+    // Drifting embers rise and gently recirculate
+    if (this.embers) {
+      const arr = this.embers.geometry.getAttribute('position') as THREE.BufferAttribute;
+      for (let i = 0; i < arr.count; i++) {
+        let y = arr.getY(i) + dt * 6;
+        const x = arr.getX(i) + Math.sin(t * 0.3 + i) * dt * 2;
+        if (y > 300) y = -90;
+        arr.setY(i, y); arr.setX(i, x);
+      }
+      arr.needsUpdate = true;
+    }
+  }
 
   dispose() {
     cancelAnimationFrame(this.rafId);
