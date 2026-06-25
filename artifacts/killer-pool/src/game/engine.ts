@@ -173,8 +173,8 @@ function makeFloorTexture(): THREE.CanvasTexture {
   return t;
 }
 
-// Soft radial glow sprite — reused for the under-table light pool, bottle
-// backlights and drifting embers.
+// Soft radial glow sprite — reused for the under-table light pool and
+// bottle backlights.
 function makeGlowTexture(rgb = '255,210,150', inner = 0.85): THREE.CanvasTexture {
   const S = 256;
   const c = document.createElement('canvas'); c.width = S; c.height = S;
@@ -333,7 +333,6 @@ export class GameEngine {
   // ── environment animation ──
   private envTime = 0;
   private flickerSigns: { mat: THREE.Material & { opacity: number }; base: number; speed: number; phase: number }[] = [];
-  private embers?: THREE.Points;
   private discoBall?: THREE.Object3D;
   private ceilingFan?: THREE.Object3D;
   private tvScreen?: { mat: THREE.MeshBasicMaterial };
@@ -473,6 +472,27 @@ export class GameEngine {
     for (const [x, z] of floorWash) {
       const pl = new THREE.PointLight(0xFF9C5A, 55, 320, 1.8);
       pl.position.set(x, FLOOR_LVL, z);
+      this.scene.add(pl);
+    }
+
+    // ── Saloon wall washes — light the bar, props & walls so the room reads ──
+    //    (kept near the walls with limited range so they don't wash the table)
+    const WALL_MID = -(LEG_H + TABLE_TH) + 150;
+    const wallWash: [number, number, number, number, number][] = [
+      // color, x, y, z, intensity — South wall = the bar (brightest)
+      [0xFFC080,  -120, WALL_MID, 320, 240],
+      [0xFFC080,   120, WALL_MID, 320, 240],
+      [0xFFB070,     0, WALL_MID + 90, 330, 180],   // lifts the hero sign + bottles
+      // North wall (skyline + signs)
+      [0xB088FF,     0, WALL_MID + 40, -320, 150],
+      // West wall (dartboard + photos)
+      [0xFFB878,  -320, WALL_MID, 0, 150],
+      // East wall (TV + plants)
+      [0x88B0FF,   320, WALL_MID, 80, 150],
+    ];
+    for (const [color, x, y, z, intensity] of wallWash) {
+      const pl = new THREE.PointLight(color, intensity, 420, 1.6);
+      pl.position.set(x, y, z);
       this.scene.add(pl);
     }
   }
@@ -663,7 +683,6 @@ export class GameEngine {
     // ── Backbar, patrons & deeper saloon detail ──
     this.buildBackBar(room, FLOOR_Y, ROOM, barY);
     this.buildDecor(room, ROOM, FLOOR_Y, WALL_H, CEIL_Y);
-    this.buildAtmosphere(room, FLOOR_Y, CEIL_Y);
 
     this.scene.add(room);
   }
@@ -852,26 +871,6 @@ export class GameEngine {
     fan.position.set(-150, CEIL_Y - 24, 150);
     room.add(fan);
     this.ceilingFan = fan;
-  }
-
-  // ── Drifting embers / dust motes catching the neon (ambient life) ──
-  private buildAtmosphere(room: THREE.Object3D, FLOOR_Y: number, CEIL_Y: number) {
-    const N = 140;
-    const pos = new Float32Array(N * 3);
-    for (let i = 0; i < N; i++) {
-      pos[i*3]   = (Math.random() - 0.5) * 760;
-      pos[i*3+1] = FLOOR_Y + Math.random() * (CEIL_Y - FLOOR_Y);
-      pos[i*3+2] = (Math.random() - 0.5) * 760;
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    const mat = new THREE.PointsMaterial({
-      size: 3.2, map: makeGlowTexture('255,200,140', 0.9), transparent: true,
-      blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.7,
-    });
-    const pts = new THREE.Points(geo, mat);
-    room.add(pts);
-    this.embers = pts;
   }
 
   private addNeonSign(
@@ -1625,18 +1624,6 @@ export class GameEngine {
     // TV faint static flicker
     if (this.tvScreen) {
       this.tvScreen.mat.color.setScalar(0.85 + 0.15 * Math.abs(Math.sin(t * 9)));
-    }
-
-    // Drifting embers rise and gently recirculate
-    if (this.embers) {
-      const arr = this.embers.geometry.getAttribute('position') as THREE.BufferAttribute;
-      for (let i = 0; i < arr.count; i++) {
-        let y = arr.getY(i) + dt * 6;
-        const x = arr.getX(i) + Math.sin(t * 0.3 + i) * dt * 2;
-        if (y > 300) y = -90;
-        arr.setY(i, y); arr.setX(i, x);
-      }
-      arr.needsUpdate = true;
     }
   }
 
