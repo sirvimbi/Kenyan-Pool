@@ -942,7 +942,7 @@ export class GameEngine {
     // felt curves around each pocket), and the wood frame uses the same outline
     // as a cut-out (so the board follows the rail angle and never covers a hole).
     const rCorner = BALL_R * 2.02;                  // corner hole disc radius
-    const rSide   = BALL_R * 2.27;                  // side hole disc radius
+    const rSide   = rCorner;                        // side hole disc — matched to the corners
     const Bc = 1.3, Bs = 1.3;                        // hole recess past the nose line
     // Cushion mouth anchor points (the same tips the cushion prisms below use).
     // The throat outline runs pocket-to-pocket THROUGH these mouth tips, so the
@@ -1107,6 +1107,34 @@ export class GameEngine {
       hole.rotation.x = -Math.PI / 2;
       hole.position.set(px, 0.05, pz);
       this.tableGroup.add(hole);
+    }
+
+    // ── Center-pocket back covers ─────────────────────────────────
+    // Behind each side-pocket cushion nose the felt outline bows outward, leaving
+    // an exposed shelf where the black hole disc would otherwise read PAST the
+    // back of the rail. Cap just those two shelves — the ones BEHIND the cushion
+    // noses (z between the cushion's outer corner Ms and its nose sideN), leaving
+    // the open central mouth (|z| < Ms) untouched so the throat still reads as a
+    // hole. Rail-coloured wood, starting flush at the cushion outer face (no
+    // intrusion) and reaching into the frame's inner cut. The cover top sits a
+    // hair below the wood-frame top so the two coincident surfaces never z-fight.
+    const sideArcMaxX = PW + Bs + Math.hypot(Bs, sideN);   // outer edge of the felt opening
+    const coverTopY = railY + TABLE_TH / 2 - 0.1;          // just below the frame top
+    const coverH = 6;
+    const coverCY = coverTopY - coverH / 2;
+    for (const side of [-1, 1] as const) {
+      for (const zSign of [-1, 1] as const) {
+        const x0 = PW + CD;            // flush with the cushion outer face
+        const x1 = sideArcMaxX;        // into the wood frame's inner cut (buried, no gap)
+        const z0 = Ms;                 // from the cushion's outer (pocket-facing) corner
+        const z1 = sideN;              // to the cushion nose / inner mouth corner
+        const cover = new THREE.Mesh(
+          new THREE.BoxGeometry(x1 - x0, coverH, z1 - z0),
+          woodMat.clone()
+        );
+        cover.position.set(side * (x0 + x1) / 2, coverCY, zSign * (z0 + z1) / 2);
+        this.tableGroup.add(cover);
+      }
     }
 
     // ── Table legs ────────────────────────────────────────────────
