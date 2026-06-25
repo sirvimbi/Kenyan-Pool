@@ -41,25 +41,25 @@ function makeBallTexture(num: number): THREE.CanvasTexture {
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   } else if (isStripe) {
-    ctx.fillStyle = '#F0EEE8'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#FBFAF6'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = col;
-    ctx.fillRect(0, H*0.27, W, H*0.46);
+    ctx.fillRect(0, H*0.30, W, H*0.40);
     // Edge fade
-    const gTop = ctx.createLinearGradient(0, H*0.27, 0, H*0.37);
-    gTop.addColorStop(0, 'rgba(255,255,255,0.6)');
+    const gTop = ctx.createLinearGradient(0, H*0.30, 0, H*0.40);
+    gTop.addColorStop(0, 'rgba(255,255,255,0.5)');
     gTop.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = gTop; ctx.fillRect(0, H*0.27, W, H*0.1);
-    const gBot = ctx.createLinearGradient(0, H*0.63, 0, H*0.73);
+    ctx.fillStyle = gTop; ctx.fillRect(0, H*0.30, W, H*0.1);
+    const gBot = ctx.createLinearGradient(0, H*0.60, 0, H*0.70);
     gBot.addColorStop(0, 'rgba(255,255,255,0)');
-    gBot.addColorStop(1, 'rgba(255,255,255,0.6)');
-    ctx.fillStyle = gBot; ctx.fillRect(0, H*0.63, W, H*0.1);
+    gBot.addColorStop(1, 'rgba(255,255,255,0.5)');
+    ctx.fillStyle = gBot; ctx.fillRect(0, H*0.60, W, H*0.1);
   } else {
     ctx.fillStyle = col; ctx.fillRect(0, 0, W, H);
     // subtle gradient to add depth
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, 'rgba(255,255,255,0.18)');
+    g.addColorStop(0, 'rgba(255,255,255,0.12)');
     g.addColorStop(0.5, 'rgba(255,255,255,0)');
-    g.addColorStop(1, 'rgba(0,0,0,0.25)');
+    g.addColorStop(1, 'rgba(0,0,0,0.30)');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
 

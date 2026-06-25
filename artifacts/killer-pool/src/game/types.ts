@@ -47,11 +47,14 @@ export const CUSHION_POSITIONS: Record<number,[number,number]> = {
   9:  [ RX,  -65], 10:[ RX, -22], 14: [ RX, 22],  5: [ RX, 65],
 };
 
+// Standard American pool colours. Solids 3-7 share their hue with stripes 11-15;
+// 8 is black. 9 (yellow) and 10 (blue) follow standard pool. Deep/saturated so
+// solids vs stripes of the same hue stay easy to tell apart.
 export const BALL_COLORS: Record<number, string> = {
-  0:  '#F8F5E8',
-  3:  '#E83028', 4:  '#E8C010', 5:  '#E06820', 6: '#1A8A3A',
-  7:  '#7A1020', 8:  '#181818', 9:  '#E8D010', 10:'#1262C0',
-  11: '#E83028', 12: '#E8C010', 13: '#E06820', 14:'#1A8A3A', 15:'#7A1020',
+  0:  '#FFFFFF',
+  3:  '#CC0000', 4:  '#660099', 5:  '#FF6600', 6:  '#006633',
+  7:  '#800020', 8:  '#000000', 9:  '#E6B800', 10: '#003399',
+  11: '#CC0000', 12: '#660099', 13: '#FF6600', 14: '#006633', 15: '#800020',
 };
 
 export interface Vec2 { x: number; z: number; }
