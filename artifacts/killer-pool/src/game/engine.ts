@@ -592,12 +592,6 @@ export class GameEngine {
       color: 0x165028, roughness: 0.82, side: THREE.DoubleSide
     });
 
-    // ── Playing surface ───────────────────────────────────────────
-    const surf = new THREE.Mesh(new THREE.PlaneGeometry(TABLE_W, TABLE_L), feltMat);
-    surf.rotation.x = -Math.PI/2;
-    surf.receiveShadow = true;
-    this.tableGroup.add(surf);
-
     // ── Cushion geometry constants ────────────────────────────────
     const CD = CUSHION;                              // cushion depth = 5 cm
     const CH = 3.7;                                  // cushion nose height = 37 mm above the slate bed
@@ -611,6 +605,56 @@ export class GameEngine {
     const Mc = 3.77;                                // corner nose setback along each rail
     const Ms = 2.9;                                 // side-pocket nose setback along rail
     const Cs = CD * Math.tan(38 * Math.PI / 180);   // side facing recede ≈ 3.9 cm
+
+    // ── Pocket throat outline ─────────────────────────────────────
+    // The bed and the wood frame share one scalloped outline: along each rail
+    // it runs straight on the nose line, and at every pocket it bows OUTWARD in
+    // a circular arc around the hole. The green cloth fills this outline (so the
+    // felt curves around each pocket), and the wood frame uses the same outline
+    // as a cut-out (so the board follows the rail angle and never covers a hole).
+    const rCorner = BALL_R * 2.02;                  // corner hole disc radius
+    const rSide   = BALL_R * 2.27;                  // side hole disc radius
+    const Bc = 1.3, Bs = 1.3;                        // hole recess past the nose line
+    const RtC = rCorner + 1.4;                       // corner throat radius (green ring around hole)
+    const RtS = rSide + 0.4;                         // side throat radius
+    const offC = Math.sqrt(RtC * RtC - Bc * Bc) - Bc;   // corner arc inset along each rail
+    const zS   = Math.sqrt(RtS * RtS - Bs * Bs);        // side arc crossing offset along rail
+    const TAU = Math.PI * 2;
+    const angOf = (cx: number, cz: number, p: [number, number]) => Math.atan2(p[1] - cz, p[0] - cx);
+    // Sample the arc around hole centre (cx,cz) from Pin to Pout, taking the side
+    // that bows through `outAng` (the outward/away-from-table direction).
+    const arcInterior = (cx: number, cz: number, r: number, Pin: [number, number], Pout: [number, number], outAng: number, n: number): [number, number][] => {
+      const a0 = angOf(cx, cz, Pin); const a1 = angOf(cx, cz, Pout);
+      let a1u = a1; while (a1u <= a0) a1u += TAU; const midU = (a0 + a1u) / 2;
+      let a1d = a1; while (a1d >= a0) a1d -= TAU; const midD = (a0 + a1d) / 2;
+      const dd = (x: number, y: number) => Math.abs(((x - y) + Math.PI) % TAU - Math.PI);
+      const aEnd = dd(midU, outAng) <= dd(midD, outAng) ? a1u : a1d;
+      const o: [number, number][] = [];
+      for (let i = 1; i < n; i++) { const a = a0 + (aEnd - a0) * (i / n); o.push([cx + r * Math.cos(a), cz + r * Math.sin(a)]); }
+      return o;
+    };
+    const playfield: [number, number][] = [];
+    {
+      const P = (x: number, z: number) => playfield.push([x, z]);
+      const arc = (cx: number, cz: number, r: number, Pin: [number, number], Pout: [number, number], out: number, n: number) => {
+        for (const q of arcInterior(cx, cz, r, Pin, Pout, out, n)) playfield.push(q);
+      };
+      P(PW, -(PL - offC));
+      P(PW, -zS);  arc(PW + Bs, 0, RtS, [PW, -zS], [PW, zS], 0, 16);  P(PW, zS);
+      P(PW, PL - offC);  arc(PW + Bc, PL + Bc, RtC, [PW, PL - offC], [PW - offC, PL], Math.PI / 4, 20);  P(PW - offC, PL);
+      P(-(PW - offC), PL);  arc(-(PW + Bc), PL + Bc, RtC, [-(PW - offC), PL], [-PW, PL - offC], 3 * Math.PI / 4, 20);  P(-PW, PL - offC);
+      P(-PW, zS);  arc(-(PW + Bs), 0, RtS, [-PW, zS], [-PW, -zS], Math.PI, 16);  P(-PW, -zS);
+      P(-PW, -(PL - offC));  arc(-(PW + Bc), -(PL + Bc), RtC, [-PW, -(PL - offC)], [-(PW - offC), -PL], -3 * Math.PI / 4, 20);  P(-(PW - offC), -PL);
+      P(PW - offC, -PL);  arc(PW + Bc, -(PL + Bc), RtC, [PW - offC, -PL], [PW, -(PL - offC)], -Math.PI / 4, 20);
+    }
+    const playVerts = playfield.map(([x, z]) => new THREE.Vector2(x, -z));
+
+    // ── Playing surface (scalloped green cloth that curves around each pocket) ──
+    const feltGeo = new THREE.ShapeGeometry(new THREE.Shape(playVerts));
+    feltGeo.rotateX(-Math.PI / 2);
+    const surf = new THREE.Mesh(feltGeo, feltMat);
+    surf.receiveShadow = true;
+    this.tableGroup.add(surf);
 
     // Helper: extrude a flat footprint polygon (3D [x, z] points) up by CH.
     // The shape uses shapeY = −(3D z); rotateX(−90°) maps extrude depth → +Y.
@@ -663,20 +707,22 @@ export class GameEngine {
     }
 
     // ── Outer wood rail frame ─────────────────────────────────────
+    // One extruded slab: an outer rectangle with the scalloped playfield outline
+    // punched out as a hole, so the wood follows the rail angle and curves around
+    // each pocket instead of running straight over the holes.
     const RAIL_W = CD + 4;
     const railY  = -TABLE_TH / 2 + CD * 0.6;
-    const nsRail = () => new THREE.BoxGeometry(TABLE_W + RAIL_W * 2, TABLE_TH, RAIL_W);
-    const ewRail = () => new THREE.BoxGeometry(RAIL_W, TABLE_TH, TABLE_L + RAIL_W * 2);
-    for (const end of [-1, 1]) {
-      const r = new THREE.Mesh(nsRail(), woodMat.clone());
-      r.position.set(0, railY, end * (TABLE_L / 2 + RAIL_W / 2));
-      this.tableGroup.add(r);
-    }
-    for (const side of [-1, 1]) {
-      const r = new THREE.Mesh(ewRail(), woodMat.clone());
-      r.position.set(side * (TABLE_W / 2 + RAIL_W / 2), railY, 0);
-      this.tableGroup.add(r);
-    }
+    const OFX = TABLE_W / 2 + RAIL_W, OFZ = TABLE_L / 2 + RAIL_W;
+    const frameShape = new THREE.Shape([
+      new THREE.Vector2(-OFX, -OFZ), new THREE.Vector2(OFX, -OFZ),
+      new THREE.Vector2(OFX, OFZ),   new THREE.Vector2(-OFX, OFZ),
+    ]);
+    frameShape.holes.push(new THREE.Path(playVerts));
+    const frameGeo = new THREE.ExtrudeGeometry(frameShape, { steps: 1, depth: TABLE_TH, bevelEnabled: false });
+    frameGeo.rotateX(-Math.PI / 2);
+    const frame = new THREE.Mesh(frameGeo, woodMat.clone());
+    frame.position.y = railY - TABLE_TH / 2;   // extrude spans y∈[0,TABLE_TH] → centre on railY
+    this.tableGroup.add(frame);
 
     // Table body slab (below playing surface)
     const body = new THREE.Mesh(
@@ -686,34 +732,27 @@ export class GameEngine {
     body.position.set(0, -TABLE_TH - 5, 0);
     this.tableGroup.add(body);
 
-    // ── Pocket holes (dark discs + leather rings) ─────────────────
-    // Stronger negative polygonOffset than the felt (-2) so the holes always
-    // win the depth test and are never covered by the playing surface.
+    // ── Pocket holes (plain black discs) ──────────────────────────
+    // No leather ream: the green throat (the scalloped felt above) surrounds each
+    // hole, so it reads as green cloth straight into a black hole. Stronger
+    // negative polygonOffset than the felt (-2) so the discs always win the depth
+    // test and are never covered by the playing surface.
     const pocketMat = new THREE.MeshBasicMaterial({
       color: 0x020102,
       polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
     });
-    const leatherMat = new THREE.MeshStandardMaterial({
-      color: 0x1A0A04, roughness: 0.6,
-      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
-    });
     // Holes recessed slightly back from the nose line so the longer cushions tuck over them.
-    const Bc = 1.3, Bs = 1.3;
     const pocketDefs: [number, number, boolean][] = [
       [-(PW + Bc), -(PL + Bc), true],  [-(PW + Bs), 0, false],
       [-(PW + Bc),  PL + Bc, true],    [ PW + Bc, -(PL + Bc), true],
       [ PW + Bs, 0, false],            [ PW + Bc,  PL + Bc, true],
     ];
     for (const [px, pz, isCorner] of pocketDefs) {
-      const r = isCorner ? BALL_R * 2.02 : BALL_R * 2.27;
+      const r = isCorner ? rCorner : rSide;
       const hole = new THREE.Mesh(new THREE.CircleGeometry(r, 24), pocketMat);
       hole.rotation.x = -Math.PI / 2;
       hole.position.set(px, 0.05, pz);
       this.tableGroup.add(hole);
-      const ring = new THREE.Mesh(new THREE.RingGeometry(r, r + 2, 24), leatherMat);
-      ring.rotation.x = -Math.PI / 2;
-      ring.position.set(px, 0.1, pz);
-      this.tableGroup.add(ring);
     }
 
     // ── Table legs ────────────────────────────────────────────────
