@@ -600,14 +600,16 @@ export class GameEngine {
 
     // ── Cushion geometry constants ────────────────────────────────
     const CD = CUSHION;                              // cushion depth = 5 cm
-    const CH = BALL_R * 1.82;                        // cushion height ≈ 5.2 cm (1⅞" + cloth)
+    const CH = 3.7;                                  // cushion nose height = 37 mm above the slate bed
 
     // Pocket cut-back geometry (matches reference top-down schematic):
     //   Each cushion is a single extruded quad whose ends are mitred for the pockets,
     //   so all six pocket holes stay fully open and clearly visible.
     //   Corner: 45° mitre. Side: WPA ~104° cut → facing 38° from ⊥ (recede = CD·tan38°).
-    const Mc = 8;                                   // corner nose setback along each rail (> corner r 5.8)
-    const Ms = 9;                                   // side-pocket nose setback along rail (> side r 6.5)
+    // Mouth widths to WPA spec: corner = (Mc+CD)·√2 ≈ 12.4 cm (spec 12.1–12.7);
+    // side = 2·(Ms+Cs) ≈ 13.6 cm (spec 13.3–14.0).
+    const Mc = 3.77;                                // corner nose setback along each rail
+    const Ms = 2.9;                                 // side-pocket nose setback along rail
     const Cs = CD * Math.tan(38 * Math.PI / 180);   // side facing recede ≈ 3.9 cm
 
     // Helper: extrude a flat footprint polygon (3D [x, z] points) up by CH.
@@ -695,10 +697,12 @@ export class GameEngine {
       color: 0x1A0A04, roughness: 0.6,
       polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
     });
+    // Holes recessed slightly back from the nose line so the longer cushions tuck over them.
+    const Bc = 1.3, Bs = 1.3;
     const pocketDefs: [number, number, boolean][] = [
-      [-PW, -PL, true],  [-PW, 0, false],
-      [-PW,  PL, true],  [ PW,-PL, true],
-      [ PW, 0, false],   [ PW,  PL, true],
+      [-(PW + Bc), -(PL + Bc), true],  [-(PW + Bs), 0, false],
+      [-(PW + Bc),  PL + Bc, true],    [ PW + Bc, -(PL + Bc), true],
+      [ PW + Bs, 0, false],            [ PW + Bc,  PL + Bc, true],
     ];
     for (const [px, pz, isCorner] of pocketDefs) {
       const r = isCorner ? BALL_R * 2.02 : BALL_R * 2.27;
