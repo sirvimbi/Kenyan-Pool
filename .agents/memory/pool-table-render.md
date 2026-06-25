@@ -43,3 +43,32 @@ on railY. Pocket holes are now plain black `CircleGeometry` discs (no leather
 ring) sitting on the green throat. Throat radii are bounded by the outer table
 edge AND must stay ≤ the cushion-nose distance or the throat pokes past the
 cushions. Verify the 2D outline with a top-down SVG diagram before porting.
+
+# Corner throats: route the outline THROUGH the cushion mouth tips
+
+If the playfield outline arcs around a pocket from points found by intersecting a
+fixed-radius throat circle with the straight rail (nose) line, it leaves a flat
+wood WEDGE between where the cushion mitre ends and where the arc starts — a sharp
+corner that looks wrong and can obstruct a ball. **Fix:** make the outline route
+inner-end → cushion long-rail mouth tip → arc → cushion short-rail mouth tip →
+inner-end at each corner (sides arc directly between the two cushion noses). The
+cushion MITRE faces become the outline edges, so the wood is cut flush behind the
+angled rail and only the mitred cushion is seen leading into the pocket. Derive
+each arc radius from its endpoint (`Math.hypot(Pin−centre)`) so it passes exactly
+through the mouth tips — do NOT pass a fixed throat radius. Corner throat radius
+ends up ≈ tip-to-hole-centre distance; confirm it still exceeds the hole disc
+radius (it does for the WPA dims, ~0.5cm green ring).
+
+# Rail flicker = wood frame inner wall coplanar with cushion nose face
+
+The wood frame's inner vertical wall (the extrude hole edge) runs along the nose
+line (x=±PW on long rails, z=±PL on short rails). The cushion prisms' inner
+(playing) face is at the SAME nose line. Two coplanar vertical faces → z-fight →
+the rail "flickers" at grazing angles and the felt near the rail drops out.
+**Fix:** overhang the cushion inner faces inward by a small COVER (~0.6cm):
+`IX = side*(PW-COVER)`, `iZ = end*(PL-COVER)`. The cushion face then sits in
+front of the wood wall and hides it; the felt's negative polygonOffset handles
+the overhang underside. **Why not move the wood instead:** offsetting the wood
+hole outward opens gaps at the pocket throats (felt smaller than the hole) — the
+cushion overhang is local and leaves felt+wood sharing one outline. Physics is
+unaffected (physics/ai read PW/PL/HW/HL from types.ts; cushions are visual only).

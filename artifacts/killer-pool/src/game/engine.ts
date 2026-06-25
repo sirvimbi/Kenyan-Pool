@@ -615,15 +615,23 @@ export class GameEngine {
     const rCorner = BALL_R * 2.02;                  // corner hole disc radius
     const rSide   = BALL_R * 2.27;                  // side hole disc radius
     const Bc = 1.3, Bs = 1.3;                        // hole recess past the nose line
-    const RtC = rCorner + 1.4;                       // corner throat radius (green ring around hole)
-    const RtS = rSide + 0.4;                         // side throat radius
-    const offC = Math.sqrt(RtC * RtC - Bc * Bc) - Bc;   // corner arc inset along each rail
-    const zS   = Math.sqrt(RtS * RtS - Bs * Bs);        // side arc crossing offset along rail
+    // Cushion mouth anchor points (the same tips the cushion prisms below use).
+    // The throat outline runs pocket-to-pocket THROUGH these mouth tips, so the
+    // wood is cut flush behind the angled rail — no flat board wedge is left at a
+    // corner, only the mitred cushion face is seen leading into the pocket.
+    const cIn   = PL - Mc - CD;   // |z| where the long-rail cushion ends near a corner
+    const cTipX = PW + CD;        // |x| of the long-rail corner mouth tip
+    const cTipZ = PL - Mc;        // |z| of the long-rail corner mouth tip
+    const sIn   = PW - Mc - CD;   // |x| where the short-rail cushion ends near a corner
+    const sTipX = PW - Mc;        // |x| of the short-rail corner mouth tip
+    const sTipZ = PL + CD;        // |z| of the short-rail corner mouth tip
+    const sideN = Ms + Cs;        // |z| of the side-pocket cushion nose
     const TAU = Math.PI * 2;
     const angOf = (cx: number, cz: number, p: [number, number]) => Math.atan2(p[1] - cz, p[0] - cx);
-    // Sample the arc around hole centre (cx,cz) from Pin to Pout, taking the side
-    // that bows through `outAng` (the outward/away-from-table direction).
-    const arcInterior = (cx: number, cz: number, r: number, Pin: [number, number], Pout: [number, number], outAng: number, n: number): [number, number][] => {
+    // Sample the arc around hole centre (cx,cz) from Pin to Pout (radius = |Pin−centre|),
+    // taking the side that bows through `outAng` (the outward/away-from-table direction).
+    const arcInterior = (cx: number, cz: number, Pin: [number, number], Pout: [number, number], outAng: number, n: number): [number, number][] => {
+      const r = Math.hypot(Pin[0] - cx, Pin[1] - cz);
       const a0 = angOf(cx, cz, Pin); const a1 = angOf(cx, cz, Pout);
       let a1u = a1; while (a1u <= a0) a1u += TAU; const midU = (a0 + a1u) / 2;
       let a1d = a1; while (a1d >= a0) a1d -= TAU; const midD = (a0 + a1d) / 2;
@@ -635,17 +643,29 @@ export class GameEngine {
     };
     const playfield: [number, number][] = [];
     {
+      const PI = Math.PI;
       const P = (x: number, z: number) => playfield.push([x, z]);
-      const arc = (cx: number, cz: number, r: number, Pin: [number, number], Pout: [number, number], out: number, n: number) => {
-        for (const q of arcInterior(cx, cz, r, Pin, Pout, out, n)) playfield.push(q);
+      const arc = (cx: number, cz: number, Pin: [number, number], Pout: [number, number], out: number, n: number) => {
+        for (const q of arcInterior(cx, cz, Pin, Pout, out, n)) playfield.push(q);
       };
-      P(PW, -(PL - offC));
-      P(PW, -zS);  arc(PW + Bs, 0, RtS, [PW, -zS], [PW, zS], 0, 16);  P(PW, zS);
-      P(PW, PL - offC);  arc(PW + Bc, PL + Bc, RtC, [PW, PL - offC], [PW - offC, PL], Math.PI / 4, 20);  P(PW - offC, PL);
-      P(-(PW - offC), PL);  arc(-(PW + Bc), PL + Bc, RtC, [-(PW - offC), PL], [-PW, PL - offC], 3 * Math.PI / 4, 20);  P(-PW, PL - offC);
-      P(-PW, zS);  arc(-(PW + Bs), 0, RtS, [-PW, zS], [-PW, -zS], Math.PI, 16);  P(-PW, -zS);
-      P(-PW, -(PL - offC));  arc(-(PW + Bc), -(PL + Bc), RtC, [-PW, -(PL - offC)], [-(PW - offC), -PL], -3 * Math.PI / 4, 20);  P(-(PW - offC), -PL);
-      P(PW - offC, -PL);  arc(PW + Bc, -(PL + Bc), RtC, [PW - offC, -PL], [PW, -(PL - offC)], -Math.PI / 4, 20);
+      // CCW: up the right rail → across the top → down the left rail → across the bottom.
+      // Corners route inner-end → mouth-tip → arc → mouth-tip → inner-end (mitre faces
+      // become the outline edges). Sides arc straight between the two cushion noses.
+      P(PW, -cIn);
+      P(PW, -sideN);  arc(PW + Bs, 0, [PW, -sideN], [PW, sideN], 0, 16);  P(PW, sideN);
+      P(PW, cIn);  P(cTipX, cTipZ);
+      arc(PW + Bc, PL + Bc, [cTipX, cTipZ], [sTipX, sTipZ], PI / 4, 18);
+      P(sTipX, sTipZ);  P(sIn, PL);
+      P(-sIn, PL);  P(-sTipX, sTipZ);
+      arc(-(PW + Bc), PL + Bc, [-sTipX, sTipZ], [-cTipX, cTipZ], 3 * PI / 4, 18);
+      P(-cTipX, cTipZ);  P(-PW, cIn);
+      P(-PW, sideN);  arc(-(PW + Bs), 0, [-PW, sideN], [-PW, -sideN], PI, 16);  P(-PW, -sideN);
+      P(-PW, -cIn);  P(-cTipX, -cTipZ);
+      arc(-(PW + Bc), -(PL + Bc), [-cTipX, -cTipZ], [-sTipX, -sTipZ], -3 * PI / 4, 18);
+      P(-sTipX, -sTipZ);  P(-sIn, -PL);
+      P(sIn, -PL);  P(sTipX, -sTipZ);
+      arc(PW + Bc, -(PL + Bc), [sTipX, -sTipZ], [cTipX, -cTipZ], -PI / 4, 18);
+      P(cTipX, -cTipZ);
     }
     const playVerts = playfield.map(([x, z]) => new THREE.Vector2(x, -z));
 
@@ -672,9 +692,14 @@ export class GameEngine {
       this.tableGroup.add(new THREE.Mesh(geo, mat));
     };
 
+    // The cushion inner (playing) face overhangs the felt edge inward by COVER so
+    // it sits IN FRONT of the wood frame's inner wall (which is at the nose line),
+    // hiding that coplanar wall — otherwise the two z-fight and the rail flickers.
+    const COVER = 0.6;
+
     // ── Long rails: two mitred quad segments per side (split by the side pocket) ──
     for (const side of [-1, 1] as const) {
-      const IX = side * PW;                    // inner (playing) face X = nose line
+      const IX = side * (PW - COVER);          // inner (playing) face X = nose line, overhanging the felt
       const OX = side * (PW + CD);             // outer face X = table edge
       for (const zSign of [-1, 1] as const) {
         // Angled end faces tilt toward the table centre ("facing the game"):
@@ -694,7 +719,7 @@ export class GameEngine {
 
     // ── Short rails: one mitred quad per end (45° at both corners) ──
     for (const end of [-1, 1] as const) {
-      const iZ = end * PL;                     // inner (playing) face Z = nose line
+      const iZ = end * (PL - COVER);           // inner (playing) face Z = nose line, overhanging the felt
       const oZ = end * (PL + CD);              // outer face Z = table edge
       const innerX = PW - Mc - CD;            // inner edge set back from corners
       const outerX = PW - Mc;                 // outer nose at corner mouths (45° mitre)
