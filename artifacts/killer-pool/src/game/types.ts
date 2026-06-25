@@ -38,7 +38,7 @@ const RX = PW - BALL_R;  // long-rail  ball centre x = HW ≈ 41.64
 const RZ = PL - BALL_R;  // short-rail ball centre z = HL ≈ 90.14
 
 export const CUSHION_POSITIONS: Record<number,[number,number]> = {
-  3:  [ 0,    0  ],              // centre spot
+  3:  [ 0,   43  ],              // one long-rail ball-gap up-table, opposite the cue ball
   // Short (end) rails — 2 balls each, spread ≈ TABLE_W/4
   4:  [-24,  -RZ], 15: [ 24, -RZ],
   6:  [-24,   RZ], 13: [ 24,  RZ],
