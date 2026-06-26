@@ -63,15 +63,17 @@ function makeBallTexture(num: number): THREE.CanvasTexture {
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
 
-  // Number circles
+  // Number circles — kept small so the ball colour stays dominant (especially
+  // on solids, where a large white patch washes out the hue).
   if (num > 0) {
+    const ringR = W * 0.105;
     for (const cx of [W * 0.25, W * 0.75]) {
       ctx.beginPath();
-      ctx.arc(cx, H / 2, W * 0.15, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.93)';
+      ctx.arc(cx, H / 2, ringR, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
       ctx.fill();
       ctx.fillStyle = '#1a1a1a';
-      ctx.font = `bold ${Math.round(W * 0.14)}px Arial`;
+      ctx.font = `bold ${Math.round(W * 0.105)}px Arial`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(String(num), cx, H / 2 + 2);
