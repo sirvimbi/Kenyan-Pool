@@ -1,3 +1,4 @@
 - [WebGL-free geometry verification](webgl-free-geometry-check.md) — no WebGL in headless/preview browsers; verify 3D geometry by rendering a top-down SVG diagram to public/ and screenshotting it.
 - [Pool table felt/pocket depth ordering](pool-table-render.md) — felt uses negative polygonOffset (avoids z-fight with cushion bases); flat decals on it need a STRONGER negative offset or they get covered.
 - [Pool table dimension model](pool-table-dimensions.md) — felt=rolling area, noses at felt edge, cushions extend outward; mouth-width formulas; physics pocket centers stay at nose line while visual holes recess.
+- [Turn/phase gating](turn-phase-gating.md) — startTurn() no-ops when phase==='roundEnd'; any post-round continuation (sudden death, rematch-in-place) must reset phase before calling startTurn().

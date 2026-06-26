@@ -295,6 +295,51 @@ function RoundEndScreen({ data, onReplay, onMenu, onChangeStakes }: {
   );
 }
 
+// ── Tie-break choice ──────────────────────────────────────────
+interface TieBreakData {
+  players: import('./game/types').PlayerState[];
+  tied: import('./game/types').PlayerState[];
+}
+
+function TieBreakScreen({ tied, onSplit, onBattle }: {
+  tied: import('./game/types').PlayerState[];
+  onSplit: () => void;
+  onBattle: () => void;
+}) {
+  return (
+    <div className="round-end">
+      <div className="re-box">
+        <div className="re-trophy">🤝</div>
+        <div className="re-title">IT'S A TIE!</div>
+        <div className="re-winner">{tied.map(t => t.name).join(' & ')}</div>
+        <div className="re-bd" style={{ margin: '14px 4px 6px', lineHeight: 1.5 }}>
+          You're level on points. Split the pot evenly, or settle it with a
+          one-ball battle — Ball #1 goes on the table and the first player to
+          pot it takes the entire pot.
+        </div>
+        <div className="re-btns">
+          <button className="re-btn play" onClick={onBattle}>⚔ ONE-BALL BATTLE</button>
+          <button className="re-btn change" onClick={onSplit}>SPLIT THE POT</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SuddenDeathBanner() {
+  return (
+    <div style={{
+      position: 'absolute', top: 72, left: '50%', transform: 'translateX(-50%)',
+      background: 'rgba(178,18,18,0.94)', color: '#fff', padding: '8px 22px',
+      borderRadius: 10, fontWeight: 700, letterSpacing: 1, fontSize: 13,
+      boxShadow: '0 6px 20px rgba(0,0,0,0.45)', zIndex: 25, whiteSpace: 'nowrap',
+      border: '1px solid rgba(255,255,255,0.25)',
+    }}>
+      ⚔ SUDDEN DEATH — pot the 1 to win the whole pot
+    </div>
+  );
+}
+
 // ── Loading ───────────────────────────────────────────────────
 function LoadingScreen() {
   return (
@@ -332,6 +377,7 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('loading');
   const [hud, setHud] = useState<HUDState | null>(null);
   const [roundData, setRoundData] = useState<RoundEndData | null>(null);
+  const [tieBreak, setTieBreak] = useState<TieBreakData | null>(null);
   const [lastConfigs, setLastConfigs] = useState<{ configs: PlayerConfig[]; stake: number } | null>(null);
   const [showQuitDialog, setShowQuitDialog] = useState(false);
 
@@ -344,9 +390,12 @@ export default function App() {
     engineRef.current = eng;
     eng.on('hud', (data) => setHud(data as HUDState));
     eng.on('roundEnd', (data) => {
+      setTieBreak(null);
       setRoundData(data as RoundEndData);
       setScreen('roundEnd');
     });
+    eng.on('tieBreak', (data) => setTieBreak(data as TieBreakData));
+    eng.on('battleStart', () => setTieBreak(null));
     setScreen('menu');
     return () => { eng.dispose(); };
   }, []);
@@ -398,6 +447,16 @@ export default function App() {
     setShowQuitDialog(true);
   }, []);
 
+  const handleSplit = useCallback(() => {
+    setTieBreak(null);
+    engineRef.current?.chooseSplit();
+  }, []);
+
+  const handleBattle = useCallback(() => {
+    setTieBreak(null);
+    engineRef.current?.chooseBattle();
+  }, []);
+
   return (
     <div className="app">
       {/* Always-present canvas */}
@@ -424,8 +483,16 @@ export default function App() {
             onQuit={handleQuitRequest}
           />
           <Notification hud={hud} />
+          {hud.battleMode && <SuddenDeathBanner />}
           {(hud.phase === 'aiming' || hud.phase === 'powering') && (
             <BallLegend targetBall={hud.targetBall} />
+          )}
+          {tieBreak && (
+            <TieBreakScreen
+              tied={tieBreak.tied}
+              onSplit={handleSplit}
+              onBattle={handleBattle}
+            />
           )}
           {showQuitDialog && (
             <QuitDialog

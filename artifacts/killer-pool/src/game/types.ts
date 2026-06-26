@@ -58,6 +58,7 @@ export const CUSHION_POSITIONS: Record<number,[number,number]> = {
 // hue-separated so neighbouring colours (red / orange / brown) read distinctly.
 export const BALL_COLORS: Record<number, string> = {
   0:  '#FFFFFF',
+  1:  '#FFC400',
   3:  '#C30010', 4:  '#4A008F', 5:  '#E04A00', 6:  '#00592B',
   7:  '#6E4220', 8:  '#000000', 9:  '#FFD400', 10: '#002E8A',
   11: '#C30010', 12: '#4A008F', 13: '#E04A00', 14: '#00592B', 15: '#6E4220',
@@ -115,4 +116,5 @@ export interface HUDState {
   shotResult: ShotResult | null;
   stake: number;
   camMode: 'overhead'|'cinematic'|'aim';
+  battleMode: boolean;
 }

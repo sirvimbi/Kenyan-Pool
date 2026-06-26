@@ -327,6 +327,12 @@ export class GameEngine {
   private baulkBreakRequired = false;  // target is in the box → must leave & cushion first
   private cueLeftBoxCushion = false;   // cue hit a cushion outside the box before first ball contact
 
+  // Sudden-death tie-break ("one-ball battle") state
+  private inBattle = false;                 // game is in the one-ball battle
+  private battleContestants: number[] = []; // player indices fighting for the pot
+  private pendingTieWinners: PlayerState[] = []; // tied players awaiting split/battle choice
+  private pendingBallInHand = false;        // force ball-in-hand on the next turn start
+
   private camMode: 'overhead'|'cinematic'|'aim' = 'overhead';
   private camTargetPos = new THREE.Vector3();
   private camTargetLook = new THREE.Vector3();
@@ -396,6 +402,10 @@ export class GameEngine {
     this.ballInHand = false;
     this.isDragging = false;
     this.baulkBreakRequired = false;
+    this.inBattle = false;
+    this.battleContestants = [];
+    this.pendingTieWinners = [];
+    this.pendingBallInHand = false;
 
     // Reset balls — cue ball starts on the baulk line
     this.balls = [
@@ -1483,18 +1493,22 @@ export class GameEngine {
   private startTurn() {
     if (this.phase === 'roundEnd') return;
 
-    this.targetBall = getNextTarget(this.balls);
-    if (this.targetBall < 0) { this.endRound(); return; }
+    if (this.inBattle) {
+      this.targetBall = 1; // sudden-death: everyone shoots for the 1
+    } else {
+      this.targetBall = getNextTarget(this.balls);
+      if (this.targetBall < 0) { this.endRound(); return; }
 
-    // Check if all active players are benched
-    const active = this.players.filter(p => !p.isBenched);
-    if (active.length === 0) { this.endRound(); return; }
+      // Check if all active players are benched
+      const active = this.players.filter(p => !p.isBenched);
+      if (active.length === 0) { this.endRound(); return; }
 
-    // Skip benched players
-    let tries = 0;
-    while (this.players[this.currentPlayerIndex]?.isBenched && tries < this.players.length) {
-      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
-      tries++;
+      // Skip benched players
+      let tries = 0;
+      while (this.players[this.currentPlayerIndex]?.isBenched && tries < this.players.length) {
+        this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+        tries++;
+      }
     }
 
     this.phase = 'aiming';
@@ -1510,7 +1524,9 @@ export class GameEngine {
     this.baulkBreakRequired = false;
     this.updateCursor(false);
     const cueBall = this.balls.find(b => b.number === 0);
-    if (cueBall && cueBall.isPotted) {
+    const forceInHand = this.pendingBallInHand;
+    this.pendingBallInHand = false;
+    if (cueBall && (cueBall.isPotted || forceInHand)) {
       cueBall.isPotted = false;
       cueBall.vel = { x: 0, z: 0 };
       // Place inside the box, resolving any overlap with balls already resting there.
@@ -1561,6 +1577,7 @@ export class GameEngine {
   }
 
   private onShotFinished() {
+    if (this.inBattle) { this.onBattleShotFinished(); return; }
     const result = evaluateShot({
       cueBallPotted: this.cuePottedInShot,
       firstHit: this.firstHit,
@@ -1589,7 +1606,8 @@ export class GameEngine {
 
     this.evalTimeout = setTimeout(() => {
       this.shotResult = null;
-      if (target < 0) {
+      // End early when the leader is uncatchable, or when all balls are gone.
+      if (target < 0 || this.isLeaderUncatchable()) {
         this.endRound();
         return;
       }
@@ -1598,6 +1616,21 @@ export class GameEngine {
       }
       this.startTurn();
     }, 2000);
+  }
+
+  // The game can stop early when one player leads by more than every opponent
+  // could possibly score from all the balls still on the table. If an opponent
+  // could even tie (reach the leader's score), play continues.
+  private isLeaderUncatchable(): boolean {
+    if (this.players.length < 2) return false;
+    const remaining = this.balls
+      .filter(b => !b.isPotted && b.number !== 0)
+      .reduce((s, b) => s + (BALL_VALUES[b.number] ?? 0), 0);
+    const sorted = [...this.players].sort((a, b) => b.score - a.score);
+    const leader = sorted[0];
+    const runnerUp = sorted[1];
+    // A unique leader whom no opponent can reach even with every remaining ball.
+    return leader.score > runnerUp.score + remaining;
   }
 
   skipTurn() {
@@ -1619,15 +1652,115 @@ export class GameEngine {
   private endRound() {
     this.phase = 'roundEnd';
     const winners = getWinners(this.players);
-    const payout = calcPayout(this.stake, this.players.length, winners.length);
-    for (const w of winners) {
-      const idx = this.players.indexOf(w);
-      this.players[idx] = { ...w, balance: w.balance + payout.perWinner };
+
+    // A genuine tie → let the players choose how to settle it.
+    if (winners.length > 1) {
+      this.pendingTieWinners = winners;
+      this.ballInHand = false;
+      this.isDragging = false;
+      this.updateCursor(false);
+      if (this.cueGroup) this.cueGroup.visible = false;
+      this.setCam('cinematic', false);
+      this.emit('tieBreak', { players: [...this.players], tied: winners });
+      this.emitHUD();
+      return;
     }
+
+    this.finishGame(winners);
+  }
+
+  private finishGame(winners: PlayerState[]) {
+    this.phase = 'roundEnd';
+    this.inBattle = false;
+    const winnerIds = new Set(winners.map(w => w.id));
+    const payout = calcPayout(this.stake, this.players.length, winners.length);
+    this.players = this.players.map(p =>
+      winnerIds.has(p.id) ? { ...p, balance: p.balance + payout.perWinner } : p
+    );
+    const finalWinners = this.players.filter(p => winnerIds.has(p.id));
     if (this.cueGroup) this.cueGroup.visible = false;
     this.setCam('cinematic', false);
-    this.emit('roundEnd', { players: this.players, winners, payout });
+    this.emit('roundEnd', { players: [...this.players], winners: finalWinners, payout });
     this.emitHUD();
+  }
+
+  // Tie-break choice 1: split the pot evenly among the tied players.
+  chooseSplit() {
+    if (this.pendingTieWinners.length === 0) return;
+    const winners = this.pendingTieWinners;
+    this.pendingTieWinners = [];
+    this.finishGame(winners);
+  }
+
+  // Tie-break choice 2: a sudden-death one-ball battle for the whole pot.
+  chooseBattle() {
+    if (this.pendingTieWinners.length === 0) return;
+    const contestants = this.pendingTieWinners;
+    this.pendingTieWinners = [];
+    this.startBattle(contestants);
+  }
+
+  private startBattle(contestants: PlayerState[]) {
+    // Contestants play in seat order; the first-seated (human) shoots first.
+    this.battleContestants = contestants
+      .map(c => this.players.findIndex(p => p.id === c.id))
+      .filter(i => i >= 0)
+      .sort((a, b) => a - b);
+    // Nothing to fight over — settle as a normal win/split.
+    if (this.battleContestants.length < 2) {
+      this.finishGame(contestants);
+      return;
+    }
+    this.inBattle = true;
+    this.phase = 'aiming'; // leave 'roundEnd' so startTurn() can run
+    this.currentPlayerIndex = this.battleContestants[0];
+
+    // Reset the table: Ball #1 on the standard spot (where #3 racks), cue in box.
+    const [bx, bz] = CUSHION_POSITIONS[3];
+    this.balls = [
+      { number: 0, pos: { x: 0, z: BAULK_Z }, vel: { x:0, z:0 }, isPotted: false },
+      { number: 1, pos: { x: bx, z: bz },     vel: { x:0, z:0 }, isPotted: false },
+    ];
+    this.buildBalls();
+    this.buildCue();
+
+    this.targetBall = 1;
+    this.pendingBallInHand = true; // first shooter gets ball-in-hand in the box
+    this.shotResult = null;
+    this.emit('battleStart', { contestants: this.battleContestants.map(i => this.players[i]) });
+    this.startTurn();
+  }
+
+  private nextContestant(): number {
+    if (this.battleContestants.length === 0) return this.currentPlayerIndex;
+    const pos = this.battleContestants.indexOf(this.currentPlayerIndex);
+    return this.battleContestants[(pos + 1) % this.battleContestants.length];
+  }
+
+  private onBattleShotFinished() {
+    const pottedOne = this.pottedInShot.includes(1);
+    const scratched = this.cuePottedInShot;
+    const won = pottedOne && !scratched;
+
+    this.shotResult = won
+      ? { type:'success', pottedBalls:[1], scoreChange:0, message:'✓ Potted the 1 — WINNER!', extraTurn:false }
+      : scratched
+        ? { type:'foul_scratch', pottedBalls:[], scoreChange:0, message:'⚠ Scratch — opponent gets ball-in-hand', extraTurn:false }
+        : { type:'miss', pottedBalls:[], scoreChange:0, message:'Miss — opponent to play', extraTurn:false };
+
+    this.phase = 'evaluating';
+    this.emitHUD();
+
+    this.evalTimeout = setTimeout(() => {
+      this.shotResult = null;
+      if (won) {
+        this.finishGame([this.players[this.currentPlayerIndex]]);
+        return;
+      }
+      // A scratch leaves the cue ball potted → startTurn auto-grants ball-in-hand.
+      this.currentPlayerIndex = this.nextContestant();
+      this.startTurn();
+    }, 2000);
   }
 
   // ── camera ──
@@ -1690,6 +1823,7 @@ export class GameEngine {
       shotResult:           this.shotResult,
       stake:                this.stake,
       camMode:              this.camMode,
+      battleMode:           this.inBattle,
     };
     this.emit('hud', hud);
   }
