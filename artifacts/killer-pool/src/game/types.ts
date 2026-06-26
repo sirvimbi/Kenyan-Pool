@@ -52,9 +52,9 @@ export const CUSHION_POSITIONS: Record<number,[number,number]> = {
 // hue-separated so neighbouring colours (red / orange / brown) read distinctly.
 export const BALL_COLORS: Record<number, string> = {
   0:  '#FFFFFF',
-  3:  '#C30010', 4:  '#4A008F', 5:  '#E25A00', 6:  '#00592B',
-  7:  '#5A2310', 8:  '#000000', 9:  '#E8B400', 10: '#002E8A',
-  11: '#C30010', 12: '#4A008F', 13: '#E25A00', 14: '#00592B', 15: '#5A2310',
+  3:  '#C30010', 4:  '#4A008F', 5:  '#E04A00', 6:  '#00592B',
+  7:  '#6E4220', 8:  '#000000', 9:  '#FFD400', 10: '#002E8A',
+  11: '#C30010', 12: '#4A008F', 13: '#E04A00', 14: '#00592B', 15: '#6E4220',
 };
 
 export interface Vec2 { x: number; z: number; }
