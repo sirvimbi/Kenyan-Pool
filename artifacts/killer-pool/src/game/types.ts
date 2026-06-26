@@ -53,6 +53,25 @@ export const CUSHION_POSITIONS: Record<number,[number,number]> = {
   9:  [ RX,  -65], 10:[ RX, -22], 14: [ RX, 22],  5: [ RX, 65],
 };
 
+// The six cushion "segments". A short (end) rail is one segment; each long rail
+// is split into two segments by its side pocket. Every segment has two slots.
+// Kenyan Killer rule: the ball values resting on each segment must total 19.
+export const CUSHION_SEGMENTS: [number, number][][] = [
+  [[-24, -RZ], [ 24, -RZ]],   // short bottom rail
+  [[-24,  RZ], [ 24,  RZ]],   // short top rail
+  [[-RX, -65], [-RX, -22]],   // long left rail,  lower half
+  [[-RX,  22], [-RX,  65]],   // long left rail,  upper half
+  [[ RX, -65], [ RX, -22]],   // long right rail, lower half
+  [[ RX,  22], [ RX,  65]],   // long right rail, upper half
+];
+
+// Balls 4–15 sum to 114 = 6 × 19, and no single ball is 19, so each of the six
+// segments must hold exactly two balls. That forces a unique set of pairs whose
+// values each total 19. Only their assignment to segments is randomised.
+export const BALL_PAIRS_19: [number, number][] = [
+  [4, 15], [5, 14], [6, 13], [7, 12], [8, 11], [9, 10],
+];
+
 // Standard American pool colours. Solids 3-7 share their hue with stripes 11-15;
 // 8 is black. 9 (yellow) and 10 (blue) follow standard pool. Deep/saturated and
 // hue-separated so neighbouring colours (red / orange / brown) read distinctly.

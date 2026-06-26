@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import {
   BallState, PlayerConfig, PlayerState, Vec2, ShotResult, HUDState, GamePhase,
-  TABLE_W, TABLE_L, BALL_R, CUSHION, CUSHION_POSITIONS, BALL_SEQUENCE, BALL_COLORS,
+  TABLE_W, TABLE_L, BALL_R, CUSHION, CUSHION_POSITIONS, BALL_COLORS,
+  CUSHION_SEGMENTS, BALL_PAIRS_19,
   BALL_VALUES, STARTING_BALANCE, TURN_DURATION, HW, HL, PW, PL, BAULK_Z
 } from './types';
 import { stepPhysics, allStopped, shotVelocity } from './physics';
@@ -18,6 +19,15 @@ const TABLE_TH  = 8;   // table frame thickness (top)
 const LEG_H     = 78;  // legs drop below Y=0
 
 type EventHandler = (data?: unknown) => void;
+
+// Fisher–Yates in-place shuffle, returning the same array for convenience.
+function shuffle<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 // ─────────────────────────────────────────────
 //  Ball texture generator
@@ -407,19 +417,34 @@ export class GameEngine {
     this.pendingTieWinners = [];
     this.pendingBallInHand = false;
 
-    // Reset balls — cue ball starts on the baulk line
+    // Reset balls — cue ball on the baulk line, #3 on its fixed spot, and the
+    // remaining balls racked across the six cushion segments.
     this.balls = [
       { number: 0, pos: { x: 0, z: BAULK_Z }, vel: { x:0, z:0 }, isPotted: false }
     ];
-    for (const n of BALL_SEQUENCE) {
-      const [x, z] = CUSHION_POSITIONS[n];
-      this.balls.push({ number: n, pos: { x, z }, vel: { x:0, z:0 }, isPotted: false });
-    }
+    this.rackCushionBalls();
 
     this.buildBalls();
     this.buildCue();
     this.setCam('overhead', true);
     this.emitHUD();
+  }
+
+  // Place ball #3 on its fixed spot, then rack balls 4–15 across the six cushion
+  // segments. The pairs that sum to 19 are fixed, but which pair lands on which
+  // segment (and the order within a segment) is randomised every game.
+  private rackCushionBalls() {
+    const [x3, z3] = CUSHION_POSITIONS[3];
+    this.balls.push({ number: 3, pos: { x: x3, z: z3 }, vel: { x:0, z:0 }, isPotted: false });
+
+    const pairs = shuffle(BALL_PAIRS_19.map(p => [...p] as [number, number]));
+    pairs.forEach((pair, i) => {
+      const slots = CUSHION_SEGMENTS[i];
+      shuffle([...pair]).forEach((n, j) => {
+        const [x, z] = slots[j];
+        this.balls.push({ number: n, pos: { x, z }, vel: { x:0, z:0 }, isPotted: false });
+      });
+    });
   }
 
   // ── scene building ──
