@@ -399,10 +399,10 @@ export class GameEngine {
     this.gameLoop(0);
   }
 
-  startGame(configs: PlayerConfig[], stake: number) {
+  startGame(configs: PlayerConfig[], stake: number, localBalance?: number) {
     this.stake = stake;
     this.prizePool = Math.floor(stake * configs.length * 0.9);
-    this.players = createPlayers(configs, stake);
+    this.players = createPlayers(configs, stake, localBalance);
     this.currentPlayerIndex = 0;
     this.targetBall = 3;
     this.phase = 'aiming';

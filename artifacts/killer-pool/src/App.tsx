@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { GameEngine } from "./game/engine";
 import { HUDState, PlayerConfig, BALL_VALUES, BALL_COLORS, STARTING_BALANCE } from "./game/types";
+import { useAuth } from "./auth/AuthContext";
+import SignInScreen from "./screens/SignInScreen";
+import Dashboard from "./screens/Dashboard";
+import { recordGameResult } from "./firebase/profile";
 
 // ── Menu Screen ──────────────────────────────────────────────
 function MenuScreen({ onStart }: { onStart: (configs: PlayerConfig[], stake: number) => void }) {
@@ -125,7 +129,10 @@ function PlayerPanel({ hud }: { hud: HUDState }) {
                 <div className="ps-l">FOULS</div>
               </div>
               <div className="pr-stat">
-                <div className={`ps-v a`}>{p.balance.toLocaleString()}</div>
+                {/* Privacy: only the local player (seat 0) sees their own
+                    balance; opponents' balances are hidden. The pot/prize pool
+                    stays visible to all in the top bar. */}
+                <div className={`ps-v a`}>{i === 0 ? p.balance.toLocaleString() : '•••'}</div>
                 <div className="ps-l">KSh</div>
               </div>
             </div>
@@ -371,10 +378,11 @@ function BallLegend({ targetBall }: { targetBall: number }) {
 }
 
 // ── Main App ──────────────────────────────────────────────────
-type Screen = 'loading' | 'menu' | 'game' | 'roundEnd';
+type Screen = 'dashboard' | 'menu' | 'game' | 'roundEnd';
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('loading');
+  const { user, profile, loading } = useAuth();
+  const [screen, setScreen] = useState<Screen>('dashboard');
   const [hud, setHud] = useState<HUDState | null>(null);
   const [roundData, setRoundData] = useState<RoundEndData | null>(null);
   const [tieBreak, setTieBreak] = useState<TieBreakData | null>(null);
@@ -383,6 +391,15 @@ export default function App() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
+
+  // Keep the latest profile balance / uid in refs so game callbacks (registered
+  // once) always read the current values without re-binding.
+  const profileBalanceRef = useRef<number>(STARTING_BALANCE);
+  const uidRef = useRef<string | null>(null);
+  useEffect(() => {
+    profileBalanceRef.current = profile?.wallet.play ?? STARTING_BALANCE;
+    uidRef.current = user?.uid ?? null;
+  }, [profile, user]);
 
   // Init engine once
   useEffect(() => {
@@ -396,9 +413,23 @@ export default function App() {
     });
     eng.on('tieBreak', (data) => setTieBreak(data as TieBreakData));
     eng.on('battleStart', () => setTieBreak(null));
-    setScreen('menu');
     return () => { eng.dispose(); };
   }, []);
+
+  // Persist the local player's outcome to their profile whenever a game ends.
+  useEffect(() => {
+    if (!roundData) return;
+    const uid = uidRef.current;
+    if (!uid) return;
+    const local = roundData.players.find(p => p.id === 0);
+    if (!local) return;
+    const won = roundData.winners.some(w => w.id === 0);
+    recordGameResult(uid, {
+      newBalance: local.balance,
+      won,
+      potWon: won ? roundData.payout.perWinner : 0,
+    }).catch(err => console.error('Failed to record game result', err));
+  }, [roundData]);
 
   // Init canvas when switching to game
   useEffect(() => {
@@ -420,7 +451,7 @@ export default function App() {
     if (!eng || !canvas) return;
     setTimeout(() => {
       if (!eng['renderer']) eng.init(canvas);
-      eng.startGame(configs, stake);
+      eng.startGame(configs, stake, profileBalanceRef.current);
     }, 80);
   }, []);
 
@@ -429,12 +460,13 @@ export default function App() {
     setScreen('game');
     setShowQuitDialog(false);
     setTimeout(() => {
-      engineRef.current?.startGame(lastConfigs.configs, lastConfigs.stake);
+      engineRef.current?.startGame(lastConfigs.configs, lastConfigs.stake, profileBalanceRef.current);
     }, 80);
   }, [lastConfigs]);
 
+  // Return to the dashboard (home) — shows updated balance and leaderboard.
   const handleMenu = useCallback(() => {
-    setScreen('menu');
+    setScreen('dashboard');
     setShowQuitDialog(false);
   }, []);
 
@@ -457,6 +489,10 @@ export default function App() {
     engineRef.current?.chooseBattle();
   }, []);
 
+  // Auth gating: wait for the auth state, then require sign-in before play.
+  if (loading) return <LoadingScreen />;
+  if (!user) return <SignInScreen />;
+
   return (
     <div className="app">
       {/* Always-present canvas */}
@@ -466,7 +502,9 @@ export default function App() {
         style={{ display: screen === 'game' ? 'block' : 'none' }}
       />
 
-      {screen === 'loading' && <LoadingScreen />}
+      {screen === 'dashboard' && (
+        <Dashboard onPlay={() => setScreen('menu')} />
+      )}
 
       {screen === 'menu' && (
         <MenuScreen onStart={handleStart} />

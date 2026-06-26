@@ -22,15 +22,24 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/killer-pool` — the Killer Pool game (React + Vite web artifact, previewPath `/`).
+  - `src/firebase/config.ts` — Firebase init (Auth + Firestore), config read from `VITE_FIREBASE_*` env vars, with missing-config guards.
+  - `src/firebase/profile.ts` — `PlayerProfile` type (source of truth for the player/wallet/stats schema), profile CRUD, leaderboard query.
+  - `src/auth/AuthContext.tsx` — auth provider/hook (Google + email/password), live profile subscription.
+  - `src/screens/SignInScreen.tsx`, `src/screens/Dashboard.tsx` — auth + post-login screens.
+  - `src/game/tiers.ts` — tier/badge ladder derived from lifetime wins.
+  - `src/game/engine.ts`, `src/game/rules.ts` — game state; local human is always seat index 0.
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Player profiles live in Firestore (collection `profiles`), not the Express/Postgres backend. The backend stays but is not required for accounts/dashboard.
+- Wallet balances are namespaced (`wallet.play`) so a future real-money wallet can be added without a schema migration. Current app is play-money only.
+- In-game balance privacy: only the local player (seat 0) sees their own balance; other players' balances render as `•••`. The prize pool is visible to everyone.
+- Firebase auth uses default local persistence, so sign-in survives reloads.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Killer Pool is a Kenyan-themed ("Nairobi Nights") pool game. Players sign in (Google or email/password), get a starting play-money grubstake, and see a dashboard with their balance, a leaderboard, their tier/badge with progress, and a Play button. Game results persist to their profile (games played, wins, biggest pot).
 
 ## User preferences
 
@@ -38,7 +47,8 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- **Firebase console setup is required and is owner-only.** The code is wired up, but accounts won't work until, in the Firebase console: (1) Authentication is enabled with the **Email/Password** and **Google** providers; (2) a **Firestore** database is created with security rules allowing signed-in users to read all profiles (leaderboard) and write only their own; (3) the dev and published domains are added under Authentication → Settings → Authorized domains. The sign-in screen surfaces the exact Firebase error code when these are missing (e.g. `auth/configuration-not-found` = Authentication not enabled).
+- The `VITE_FIREBASE_*` secrets are build-time env vars; after changing them, restart the `killer-pool` workflow so Vite picks them up.
 
 ## Pointers
 

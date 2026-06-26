@@ -3,7 +3,15 @@ import {
   BALL_VALUES, BALL_SEQUENCE, STARTING_BALANCE
 } from './types';
 
-export function createPlayers(configs: PlayerConfig[], stake: number): PlayerState[] {
+// `localBalance` is the signed-in player's persistent play-money balance read
+// from their profile. Player 0 ("You") plays from that balance; everyone else
+// (AI / pass-and-play seats) uses the default grubstake. Each seat pays the
+// stake up front into the pot.
+export function createPlayers(
+  configs: PlayerConfig[],
+  stake: number,
+  localBalance?: number,
+): PlayerState[] {
   return configs.map((c, i) => ({
     id: i,
     name: c.name,
@@ -12,7 +20,7 @@ export function createPlayers(configs: PlayerConfig[], stake: number): PlayerSta
     pots: 0,
     isAI: c.isAI,
     isBenched: false,
-    balance: STARTING_BALANCE - stake,
+    balance: (i === 0 && localBalance != null ? localBalance : STARTING_BALANCE) - stake,
   }));
 }
 
