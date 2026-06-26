@@ -38,11 +38,18 @@ export function evaluateShot(params: {
   } = params;
 
   if (cueBallPotted) {
+    // Potting object balls together with the cue ball: award the potted value
+    // minus the target ball's value, then play passes to the next player.
+    const potValue = pottedInShot.reduce((s, n) => s + (BALL_VALUES[n] ?? 0), 0);
+    const targetVal = BALL_VALUES[targetBall] ?? 0;
+    const change = potValue - targetVal;
     return {
       type: 'foul_scratch',
       pottedBalls: pottedInShot,
-      scoreChange: -(BALL_VALUES[targetBall] ?? 0),
-      message: '⚠ SCRATCH! Cue ball potted',
+      scoreChange: change,
+      message: potValue > 0
+        ? `⚠ SCRATCH — +${potValue} −${targetVal} = ${change >= 0 ? '+' : ''}${change} pts`
+        : '⚠ SCRATCH! Cue ball potted',
       extraTurn: false,
     };
   }
@@ -72,7 +79,9 @@ export function evaluateShot(params: {
     };
   }
 
-  if (!pottedInShot.includes(targetBall)) {
+  // Legal contact (target ball hit first). Any balls potted score their full
+  // value and the player continues — even if the target itself wasn't potted.
+  if (pottedInShot.length === 0) {
     return {
       type: 'miss',
       pottedBalls: [],
@@ -82,24 +91,24 @@ export function evaluateShot(params: {
     };
   }
 
-  const caroms = pottedInShot.filter(n => n !== targetBall);
-  const pts = BALL_VALUES[targetBall] + caroms.reduce((s, n) => s + (BALL_VALUES[n] ?? 0), 0);
+  const pts = pottedInShot.reduce((s, n) => s + (BALL_VALUES[n] ?? 0), 0);
+  const onlyTarget = pottedInShot.length === 1 && pottedInShot[0] === targetBall;
 
-  if (caroms.length > 0) {
+  if (onlyTarget) {
     return {
-      type: 'carom',
+      type: 'success',
       pottedBalls: pottedInShot,
       scoreChange: pts,
-      message: `✦ CAROM! +${pts} pts`,
+      message: `✓ Potted #${targetBall}  +${pts} pts`,
       extraTurn: true,
     };
   }
 
   return {
-    type: 'success',
+    type: 'carom',
     pottedBalls: pottedInShot,
-    scoreChange: BALL_VALUES[targetBall],
-    message: `✓ Potted #${targetBall}  +${BALL_VALUES[targetBall]} pts`,
+    scoreChange: pts,
+    message: `✦ CAROM! +${pts} pts`,
     extraTurn: true,
   };
 }
