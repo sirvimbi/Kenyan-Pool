@@ -15,7 +15,8 @@ export function stepPhysics(
   balls: BallState[],
   dt: number,
   onFirstContact: (hitter: number, hit: number) => void,
-  onBallCollision?: (impactSpeed: number) => void
+  onBallCollision?: (impactSpeed: number) => void,
+  onCushion?: (ballNumber: number, x: number, z: number) => void
 ): number[] {
   const subDt = dt / SUBSTEPS;
   const pottedNow: number[] = [];
@@ -41,10 +42,12 @@ export function stepPhysics(
 
     // Cushion bounce
     for (const b of active) {
-      if (b.pos.x < -HW) { b.pos.x = -HW; if (b.vel.x < 0) b.vel.x = -b.vel.x * CUSH_COR; }
-      if (b.pos.x >  HW) { b.pos.x =  HW; if (b.vel.x > 0) b.vel.x = -b.vel.x * CUSH_COR; }
-      if (b.pos.z < -HL) { b.pos.z = -HL; if (b.vel.z < 0) b.vel.z = -b.vel.z * CUSH_COR; }
-      if (b.pos.z >  HL) { b.pos.z =  HL; if (b.vel.z > 0) b.vel.z = -b.vel.z * CUSH_COR; }
+      let bounced = false;
+      if (b.pos.x < -HW) { b.pos.x = -HW; if (b.vel.x < 0) { b.vel.x = -b.vel.x * CUSH_COR; bounced = true; } }
+      if (b.pos.x >  HW) { b.pos.x =  HW; if (b.vel.x > 0) { b.vel.x = -b.vel.x * CUSH_COR; bounced = true; } }
+      if (b.pos.z < -HL) { b.pos.z = -HL; if (b.vel.z < 0) { b.vel.z = -b.vel.z * CUSH_COR; bounced = true; } }
+      if (b.pos.z >  HL) { b.pos.z =  HL; if (b.vel.z > 0) { b.vel.z = -b.vel.z * CUSH_COR; bounced = true; } }
+      if (bounced && onCushion) onCushion(b.number, b.pos.x, b.pos.z);
     }
 
     // Ball-ball collisions

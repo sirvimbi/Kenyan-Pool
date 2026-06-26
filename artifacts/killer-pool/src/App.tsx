@@ -230,7 +230,7 @@ function QuitDialog({ onStay, onLeave }: { onStay: ()=>void; onLeave: ()=>void }
 function Notification({ hud }: { hud: HUDState }) {
   const r = hud.shotResult;
   if (!r) return null;
-  const cls = r.type==='foul_wrong'||r.type==='foul_scratch' ? 'bad'
+  const cls = r.type==='foul_wrong'||r.type==='foul_scratch'||r.type==='foul_baulk' ? 'bad'
             : r.type==='carom' ? 'carom'
             : r.type==='success' ? 'ok'
             : 'info';

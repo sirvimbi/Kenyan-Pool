@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import {
   BallState, PlayerConfig, PlayerState, Vec2, ShotResult, HUDState, GamePhase,
   TABLE_W, TABLE_L, BALL_R, CUSHION, CUSHION_POSITIONS, BALL_SEQUENCE, BALL_COLORS,
-  BALL_VALUES, STARTING_BALANCE, TURN_DURATION, HW, HL, PW, PL
+  BALL_VALUES, STARTING_BALANCE, TURN_DURATION, HW, HL, PW, PL, BAULK_Z
 } from './types';
 import { stepPhysics, allStopped, shotVelocity } from './physics';
 import { sound } from './sound';
@@ -321,6 +321,12 @@ export class GameEngine {
   private cuePottedInShot = false;
   private shotResult: ShotResult | null = null;
 
+  // Ball-in-hand (after a scratch) + baulk-break rule state
+  private ballInHand = false;          // incoming player may drag the cue ball
+  private isDragging = false;          // currently grabbing the cue ball
+  private baulkBreakRequired = false;  // target is in the box → must leave & cushion first
+  private cueLeftBoxCushion = false;   // cue hit a cushion outside the box before first ball contact
+
   private camMode: 'overhead'|'cinematic'|'aim' = 'overhead';
   private camTargetPos = new THREE.Vector3();
   private camTargetLook = new THREE.Vector3();
@@ -367,10 +373,12 @@ export class GameEngine {
     this.buildRoom();
     this.buildTable();
 
-    canvas.addEventListener('mousemove', this.onMouseMove);
-    canvas.addEventListener('mousedown', this.onMouseDown);
-    canvas.addEventListener('mouseup',   this.onMouseUp);
-    window.addEventListener('resize',    this.onResize);
+    canvas.addEventListener('mousemove',  this.onMouseMove);
+    canvas.addEventListener('mousedown',  this.onMouseDown);
+    canvas.addEventListener('mouseup',    this.onMouseUp);
+    canvas.addEventListener('mouseleave', this.onMouseLeave);
+    window.addEventListener('mouseup',    this.onWindowMouseUp);
+    window.addEventListener('resize',     this.onResize);
 
     this.gameLoop(0);
   }
@@ -385,10 +393,13 @@ export class GameEngine {
     this.timeLeft = TURN_DURATION;
     this.lastTimerTick = performance.now();
     this.shotResult = null;
+    this.ballInHand = false;
+    this.isDragging = false;
+    this.baulkBreakRequired = false;
 
-    // Reset balls
+    // Reset balls — cue ball starts on the baulk line
     this.balls = [
-      { number: 0, pos: { x: 0, z: -47 }, vel: { x:0, z:0 }, isPotted: false }
+      { number: 0, pos: { x: 0, z: BAULK_Z }, vel: { x:0, z:0 }, isPotted: false }
     ];
     for (const n of BALL_SEQUENCE) {
       const [x, z] = CUSHION_POSITIONS[n];
@@ -1007,6 +1018,16 @@ export class GameEngine {
     surf.receiveShadow = true;
     this.tableGroup.add(surf);
 
+    // ── Baulk line (faint white) — marks where the cue ball starts / the box ──
+    const baulkGeo = new THREE.PlaneGeometry(HW * 2, 0.5);
+    baulkGeo.rotateX(-Math.PI / 2);
+    const baulkLine = new THREE.Mesh(baulkGeo, new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.28,
+      polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    }));
+    baulkLine.position.set(0, 0.08, BAULK_Z);
+    this.tableGroup.add(baulkLine);
+
     // Helper: extrude a flat footprint polygon (3D [x, z] points) up by CH.
     // The shape uses shapeY = −(3D z); rotateX(−90°) maps extrude depth → +Y.
     // Winding is normalised to CCW so every prism's top cap faces +Y consistently.
@@ -1250,7 +1271,7 @@ export class GameEngine {
 
     const isPowering = this.isPowering;
     const isActive = (this.phase === 'aiming' || this.phase === 'powering') &&
-      !this.currentPlayer?.isAI;
+      !this.currentPlayer?.isAI && !this.isDragging;
 
     this.cueGroup.visible = isActive;
     if (!isActive) return;
@@ -1308,15 +1329,40 @@ export class GameEngine {
     const cueBall = this.balls.find(b => b.number === 0);
     if (!cueBall) return;
 
+    // Ball-in-hand: drag the cue ball to any spot inside the box.
+    if (this.isDragging) {
+      const p = this.clampToBox(tablePos.x, tablePos.z);
+      cueBall.pos = { x: p.x, z: p.z };
+      this.updateCursor(true);
+      return;
+    }
+
     const dx = tablePos.x - cueBall.pos.x;
     const dz = tablePos.z - cueBall.pos.z;
     this.aimAngle = Math.atan2(dx, dz); // toward mouse
+
+    // Show the grab cursor while hovering the cue ball in ball-in-hand mode.
+    if (this.ballInHand && this.phase === 'aiming') {
+      this.updateCursor(this.isOverCueBall(tablePos, cueBall));
+    }
   };
 
   private onMouseDown = (e: MouseEvent) => {
     if (e.button !== 0) return;
     if (this.phase !== 'aiming') return;
     if (this.currentPlayer?.isAI) return;
+
+    // Ball-in-hand: clicking the cue ball starts a drag instead of a shot.
+    if (this.ballInHand) {
+      const cueBall = this.balls.find(b => b.number === 0);
+      const tablePos = this.getTableIntersect();
+      if (cueBall && tablePos && this.isOverCueBall(tablePos, cueBall)) {
+        this.isDragging = true;
+        this.updateCursor(true);
+        return;
+      }
+    }
+
     this.phase = 'powering';
     this.isPowering = true;
     this.powerStart = performance.now();
@@ -1326,11 +1372,64 @@ export class GameEngine {
 
   private onMouseUp = (e: MouseEvent) => {
     if (e.button !== 0) return;
+
+    // Drop the cue ball at its current spot; the player keeps ball-in-hand
+    // until they actually take the shot.
+    if (this.isDragging) {
+      this.isDragging = false;
+      this.updateCursor(false);
+      return;
+    }
+
     if (this.phase !== 'powering') return;
     this.isPowering = false;
     const held = (performance.now() - this.powerStart) / 1000;
     this.power = Math.min(100, held * 60);
     this.executeShot();
+  };
+
+  // Is the pointer (table-plane hit) close enough to grab the cue ball?
+  private isOverCueBall(tablePos: THREE.Vector3, cueBall: BallState): boolean {
+    const d = Math.hypot(tablePos.x - cueBall.pos.x, tablePos.z - cueBall.pos.z);
+    return d < BALL_R * 2.4;
+  }
+
+  // Clamp a desired cue-ball centre to the box and away from other balls.
+  private clampToBox(x: number, z: number): Vec2 {
+    let cx = Math.max(-HW, Math.min(HW, x));
+    let cz = Math.max(-HL, Math.min(BAULK_Z, z));
+    // Nudge out of any overlap with other balls so we never drop on top of one.
+    for (const b of this.balls) {
+      if (b.number === 0 || b.isPotted) continue;
+      const dx = cx - b.pos.x, dz = cz - b.pos.z;
+      const d = Math.hypot(dx, dz);
+      const minD = BALL_R * 2 + 0.1;
+      if (d > 0.001 && d < minD) {
+        const push = (minD - d);
+        cx += (dx / d) * push;
+        cz += (dz / d) * push;
+        cx = Math.max(-HW, Math.min(HW, cx));
+        cz = Math.max(-HL, Math.min(BAULK_Z, cz));
+      }
+    }
+    return { x: cx, z: cz };
+  }
+
+  private updateCursor(grab: boolean) {
+    this.canvas.style.cursor = grab ? (this.isDragging ? 'grabbing' : 'grab') : 'default';
+  }
+
+  // Releasing the button anywhere (even off-canvas) must end an in-progress drag
+  // so the cue ball never gets "stuck" to the pointer.
+  private onWindowMouseUp = () => {
+    if (this.isDragging) {
+      this.isDragging = false;
+      this.updateCursor(false);
+    }
+  };
+
+  private onMouseLeave = () => {
+    if (!this.isDragging) this.updateCursor(false);
   };
 
   private onResize = () => {
@@ -1356,6 +1455,10 @@ export class GameEngine {
     this.firstHit = null;
     this.pottedInShot = [];
     this.cuePottedInShot = false;
+    this.cueLeftBoxCushion = false;
+    this.ballInHand = false;
+    this.isDragging = false;
+    this.updateCursor(false);
 
     // Reset firstContactGiven flags
     for (const b of this.balls) { b.firstContactGiven = false; }
@@ -1401,14 +1504,25 @@ export class GameEngine {
     this.timeLeft = TURN_DURATION;
     this.lastTimerTick = performance.now();
 
-    // Place cue ball if potted
+    // Place cue ball if potted → incoming player gets ball-in-hand in the box
+    this.ballInHand = false;
+    this.isDragging = false;
+    this.baulkBreakRequired = false;
+    this.updateCursor(false);
     const cueBall = this.balls.find(b => b.number === 0);
     if (cueBall && cueBall.isPotted) {
       cueBall.isPotted = false;
-      cueBall.pos = { x: 0, z: -60 };
       cueBall.vel = { x: 0, z: 0 };
+      // Place inside the box, resolving any overlap with balls already resting there.
+      const placed = this.clampToBox(0, -60);
+      cueBall.pos = { x: placed.x, z: placed.z };
       const mesh = this.ballMeshes.get(0);
-      if (mesh) { mesh.visible = true; mesh.position.set(0, BALL_R, -60); }
+      if (mesh) { mesh.visible = true; mesh.position.set(placed.x, BALL_R, placed.z); }
+      this.ballInHand = true;
+      // If the ball to play sits inside the box, the cue must leave the box and
+      // strike a cushion outside it before making contact.
+      const target = this.balls.find(b => b.number === this.targetBall);
+      this.baulkBreakRequired = !!target && !target.isPotted && target.pos.z <= BAULK_Z;
     }
 
     if (this.currentPlayer?.isAI) {
@@ -1426,6 +1540,17 @@ export class GameEngine {
     const target = this.balls.find(b => b.number === this.targetBall);
     if (!cueBall || !target) return;
 
+    if (this.baulkBreakRequired) {
+      // Target sits in the box: the AI can't strike it directly. Play up-table so
+      // the cue leaves the box and rebounds off a cushion outside it first.
+      const dz = (PL - cueBall.pos.z);
+      const dx = target.pos.x - cueBall.pos.x;
+      this.aimAngle = Math.atan2(dx * 0.4, dz); // mostly up-table, slight lead toward target
+      this.power = 62;
+      this.executeShot();
+      return;
+    }
+
     const result = computeAIShot(cueBall, target, this.balls);
     this.power = result.power;
     // aimAngle = shoot direction (toward target), same convention as human aiming
@@ -1441,6 +1566,8 @@ export class GameEngine {
       firstHit: this.firstHit,
       pottedInShot: this.pottedInShot,
       targetBall: this.targetBall,
+      baulkBreakRequired: this.baulkBreakRequired,
+      baulkBreakSatisfied: this.cueLeftBoxCushion,
     });
 
     this.shotResult = result;
@@ -1478,6 +1605,9 @@ export class GameEngine {
     this.shotResult = { type:'miss', pottedBalls:[], scoreChange:0, message:'Turn forfeited', extraTurn:false };
     this.phase = 'evaluating';
     this.isPowering = false;
+    this.ballInHand = false;
+    this.isDragging = false;
+    this.updateCursor(false);
     this.emitHUD();
     this.evalTimeout = setTimeout(() => {
       this.shotResult = null;
@@ -1577,7 +1707,14 @@ export class GameEngine {
         }
       };
       const onBallCollision = (impactSpeed: number) => sound.ballClick(impactSpeed);
-      const potted = stepPhysics(this.balls, dt, firstContact, onBallCollision);
+      const onCushion = (ballNumber: number, _x: number, z: number) => {
+        // Cue ball striking a cushion outside the box, before any ball contact,
+        // satisfies the baulk-break requirement.
+        if (ballNumber === 0 && this.firstHit === null && z > BAULK_Z) {
+          this.cueLeftBoxCushion = true;
+        }
+      };
+      const potted = stepPhysics(this.balls, dt, firstContact, onBallCollision, onCushion);
       for (const n of potted) {
         if (n === 0) this.cuePottedInShot = true;
         else {
@@ -1662,11 +1799,13 @@ export class GameEngine {
     if (this.aiThinkTimeout) clearTimeout(this.aiThinkTimeout);
     if (this.evalTimeout) clearTimeout(this.evalTimeout);
     if (this.canvas) {
-      this.canvas.removeEventListener('mousemove', this.onMouseMove);
-      this.canvas.removeEventListener('mousedown', this.onMouseDown);
-      this.canvas.removeEventListener('mouseup',   this.onMouseUp);
+      this.canvas.removeEventListener('mousemove',  this.onMouseMove);
+      this.canvas.removeEventListener('mousedown',  this.onMouseDown);
+      this.canvas.removeEventListener('mouseup',    this.onMouseUp);
+      this.canvas.removeEventListener('mouseleave', this.onMouseLeave);
     }
-    window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('mouseup', this.onWindowMouseUp);
+    window.removeEventListener('resize',  this.onResize);
     if (this.renderer) this.renderer.dispose();
   }
 }

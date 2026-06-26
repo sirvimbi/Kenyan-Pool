@@ -20,6 +20,12 @@ export const PL = TABLE_L / 2;   // 99.05  nose half-length
 export const HW = PW - BALL_R;   // ≈ 46.69
 export const HL = PL - BALL_R;   // ≈ 96.19
 
+// Baulk line ("the box"): the cue ball starts on this line. After a scratch the
+// incoming player has ball-in-hand anywhere inside the box — the region between
+// the bottom short rail (z = -HL) and this line — and may not cross it.
+// A ball is "in the box" when its centre sits at z <= BAULK_Z.
+export const BAULK_Z = -47;
+
 // Pocket mouth widths (WPA spec):
 //   Corner: 4.5"–4.625" = 11.43–11.75 cm  → capture radius = 5.8 cm
 //   Side  : 5"–5.125"   = 12.7–13.01 cm   → capture radius = 6.5 cm
@@ -91,7 +97,7 @@ export type GamePhase =
   | 'roundEnd';
 
 export interface ShotResult {
-  type: 'success'|'carom'|'foul_wrong'|'foul_scratch'|'miss';
+  type: 'success'|'carom'|'foul_wrong'|'foul_scratch'|'foul_baulk'|'miss';
   pottedBalls: number[];
   scoreChange: number;
   message: string;

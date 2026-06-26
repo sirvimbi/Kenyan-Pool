@@ -29,8 +29,13 @@ export function evaluateShot(params: {
   firstHit: number | null;
   pottedInShot: number[];
   targetBall: number;
+  baulkBreakRequired?: boolean;
+  baulkBreakSatisfied?: boolean;
 }): ShotResult {
-  const { cueBallPotted, firstHit, pottedInShot, targetBall } = params;
+  const {
+    cueBallPotted, firstHit, pottedInShot, targetBall,
+    baulkBreakRequired = false, baulkBreakSatisfied = false,
+  } = params;
 
   if (cueBallPotted) {
     return {
@@ -38,6 +43,20 @@ export function evaluateShot(params: {
       pottedBalls: pottedInShot,
       scoreChange: -(BALL_VALUES[targetBall] ?? 0),
       message: '⚠ SCRATCH! Cue ball potted',
+      extraTurn: false,
+    };
+  }
+
+  // Baulk rule: with ball-in-hand and the target ball inside the box, the cue
+  // ball must leave the box and strike a cushion outside it before contacting
+  // any ball. Failing that is a foul (and any pots are forfeited).
+  if (baulkBreakRequired && !baulkBreakSatisfied) {
+    const penalty = pottedInShot.reduce((s, n) => s + (BALL_VALUES[n] ?? 0), 0);
+    return {
+      type: 'foul_baulk',
+      pottedBalls: pottedInShot,
+      scoreChange: penalty > 0 ? -penalty : 0,
+      message: '⚠ FOUL — Must leave the box & hit a cushion first',
       extraTurn: false,
     };
   }
@@ -92,7 +111,7 @@ export function applyResult(
 ): PlayerState {
   const p = { ...player };
   p.score += result.scoreChange;
-  if (result.scoreChange < 0) p.fouls++;
+  if (result.type === 'foul_scratch' || result.type === 'foul_wrong' || result.type === 'foul_baulk') p.fouls++;
   if (result.type === 'success' || result.type === 'carom') p.pots += result.pottedBalls.length;
   return p;
 }
