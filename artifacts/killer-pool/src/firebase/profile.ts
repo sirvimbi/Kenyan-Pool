@@ -14,7 +14,7 @@ import {
   type Unsubscribe,
 } from "firebase/firestore";
 import type { User } from "firebase/auth";
-import { getDb } from "./config";
+import { getDb, isFirebaseConfigured } from "./config";
 import { STARTING_BALANCE } from "../game/types";
 
 // ── Profile data model ────────────────────────────────────────
@@ -53,6 +53,16 @@ function defaultDisplayName(user: User): string {
 
 // Fetch the profile, creating it on first sign-in with a starting grubstake.
 export async function getOrCreateProfile(user: User): Promise<PlayerProfile> {
+  if (!isFirebaseConfigured) {
+    return {
+      uid: user.uid,
+      displayName: user.displayName || "Guest Player",
+      email: user.email,
+      photoURL: user.photoURL,
+      wallet: { play: STARTING_BALANCE },
+      stats: { gamesPlayed: 0, wins: 0, biggestPot: 0 },
+    };
+  }
   const db = getDb();
   const ref = doc(db, PROFILES, user.uid);
   const snap = await getDoc(ref);
@@ -83,13 +93,22 @@ export async function getOrCreateProfile(user: User): Promise<PlayerProfile> {
 export function subscribeProfile(
   uid: string,
   cb: (profile: PlayerProfile | null) => void,
+  onError?: (err: Error) => void,
 ): Unsubscribe {
+  if (!isFirebaseConfigured) {
+    // In demo mode, no live updates from Firestore.
+    return () => {};
+  }
   const db = getDb();
   const ref = doc(db, PROFILES, uid);
   return onSnapshot(
     ref,
     (snap) => cb(snap.exists() ? (snap.data() as PlayerProfile) : null),
-    () => cb(null),
+    (err) => {
+      console.error("Firestore subscription error:", err);
+      if (onError) onError(err);
+      else cb(null);
+    },
   );
 }
 
@@ -104,17 +123,56 @@ export interface GameResult {
 // Persist the outcome of a finished game to the signed-in player's profile.
 export async function recordGameResult(
   uid: string,
-  result: GameResult,
+  result: { won: boolean; potWon: number },
 ): Promise<void> {
+  if (!isFirebaseConfigured) return;
   const db = getDb();
   const ref = doc(db, PROFILES, uid);
+
   await updateDoc(ref, {
-    "wallet.play": Math.max(0, Math.round(result.newBalance)),
+    "wallet.play": increment(result.won ? result.potWon : 0),
     "stats.gamesPlayed": increment(1),
     ...(result.won ? { "stats.wins": increment(1) } : {}),
     "stats.biggestPot": await maxBiggestPot(uid, result.potWon),
     updatedAt: serverTimestamp(),
   });
+}
+
+export async function deductStake(uid: string, stake: number): Promise<void> {
+  if (!isFirebaseConfigured) return;
+  const db = getDb();
+  const ref = doc(db, PROFILES, uid);
+  await updateDoc(ref, {
+    "wallet.play": increment(-stake),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function addCredits(uid: string, amount: number): Promise<void> {
+  if (!isFirebaseConfigured) return;
+  const db = getDb();
+  const ref = doc(db, PROFILES, uid);
+  await updateDoc(ref, {
+    "wallet.play": increment(amount),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function updateProfile(
+  uid: string,
+  data: Partial<PlayerProfile>,
+): Promise<void> {
+  if (!isFirebaseConfigured) return;
+  const db = getDb();
+  const ref = doc(db, PROFILES, uid);
+  await setDoc(
+    ref,
+    {
+      ...data,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
 }
 
 // Firestore has no atomic max(); read-then-write keeps the largest pot seen.
@@ -139,6 +197,7 @@ export interface LeaderboardEntry {
 
 // Top players ranked by current play-money balance.
 export async function fetchLeaderboard(max = 10): Promise<LeaderboardEntry[]> {
+  if (!isFirebaseConfigured) return [];
   const db = getDb();
   const q = query(
     collection(db, PROFILES),

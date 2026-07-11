@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Profiles: Anyone authenticated can read (leaderboard), only owner can write
+    match /profiles/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Game Logs: Admin only read, anyone authenticated can create
+    match /game_logs/{logId} {
+      allow read: if request.auth != null && request.auth.uid == 'GsggRvZaVeZfSuHvFfmFm7Ek6iO2';
+      allow create: if request.auth != null;
+    }
+
+    // Chats: Anyone authenticated can read/write messages in a room
+    match /chats/{roomId}/messages/{messageId} {
+      allow read, create: if request.auth != null;
+    }
+  }
+}

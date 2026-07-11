@@ -72,15 +72,24 @@ export const BALL_PAIRS_19: [number, number][] = [
   [4, 15], [5, 14], [6, 13], [7, 12], [8, 11], [9, 10],
 ];
 
-// Standard American pool colours. Solids 3-7 share their hue with stripes 11-15;
-// 8 is black. 9 (yellow) and 10 (blue) follow standard pool. Deep/saturated and
-// hue-separated so neighbouring colours (red / orange / brown) read distinctly.
+// Standard WPA tournament colors, adjusted for high-contrast visibility
+// under "Nairobi Nights" neon/overhead lighting.
 export const BALL_COLORS: Record<number, string> = {
   0:  '#FFFFFF',
-  1:  '#FFC400',
-  3:  '#C30010', 4:  '#4A008F', 5:  '#E04A00', 6:  '#00592B',
-  7:  '#6E4220', 8:  '#000000', 9:  '#FFD400', 10: '#002E8A',
-  11: '#C30010', 12: '#4A008F', 13: '#E04A00', 14: '#00592B', 15: '#6E4220',
+  1:  '#ffff74', // 1: Yellow
+  3:  '#FA0542', // 3: Red
+  4:  '#5D00B3', // 4: Deep Purple
+  5:  '#cc7000', // 5: Orange
+  6:  '#007D2B', // 6: Dark Emerald Green
+  7:  '#291511', // 7: Brown
+  8:  '#000000', // 8: Solid Black
+  9:  '#ffff74', // 9: Yellow
+  10: '#003DA5', // 10: Deep Royal Blue
+  11: '#FA0542', // 11: Red
+  12: '#5D00B3', // 12: Deep Purple
+  13: '#cc7000', // 13: Orange
+  14: '#007D2B', // 14: Dark Emerald Green
+  15: '#291511', // 15: Brown
 };
 
 export interface Vec2 { x: number; z: number; }
@@ -89,6 +98,7 @@ export interface BallState {
   number: number;
   pos: Vec2;
   vel: Vec2;
+  spin?: Vec2; // x: sidespin, y: top/backspin (-1 to 1)
   isPotted: boolean;
   firstContactGiven?: boolean;
 }
@@ -96,6 +106,7 @@ export interface BallState {
 export interface PlayerConfig {
   name: string;
   isAI: boolean;
+  uid?: string;
 }
 
 export interface PlayerState {
@@ -107,6 +118,7 @@ export interface PlayerState {
   isAI: boolean;
   isBenched: boolean;
   balance: number;
+  uid?: string;
 }
 
 export type GamePhase =
@@ -134,6 +146,8 @@ export interface HUDState {
   prizePool: number;
   shotResult: ShotResult | null;
   stake: number;
-  camMode: 'overhead'|'cinematic'|'aim';
+  camMode: 'overhead'|'cinematic'|'aim'|'table-fit';
   battleMode: boolean;
+  spin: Vec2;
+  aimAngle: number;
 }

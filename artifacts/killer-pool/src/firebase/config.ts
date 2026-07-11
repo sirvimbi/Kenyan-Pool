@@ -1,6 +1,7 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, type Auth } from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
+import { getDatabase, type Database } from "firebase/database";
 
 // Firebase web config is supplied via environment variables (Vite exposes any
 // var prefixed with VITE_). The web API key is not a secret — it identifies the
@@ -15,6 +16,7 @@ const firebaseConfig = {
     | string
     | undefined,
   appId: import.meta.env.VITE_FIREBASE_APP_ID as string | undefined,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID as string | undefined,
 };
 
 // The values that must be present for Auth + Firestore to function.
@@ -29,11 +31,13 @@ export const isFirebaseConfigured = missingFirebaseConfig.length === 0;
 let app: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
 let dbInstance: Firestore | null = null;
+let rtdbInstance: Database | null = null;
 
 if (isFirebaseConfigured) {
   app = initializeApp(firebaseConfig as Record<string, string>);
   authInstance = getAuth(app);
   dbInstance = getFirestore(app);
+  rtdbInstance = getDatabase(app);
 }
 
 // Non-null accessors. These throw a clear error rather than failing silently if
@@ -54,6 +58,13 @@ export function getDb(): Firestore {
     );
   }
   return dbInstance;
+}
+
+export function getRtdb(): Database {
+  if (!rtdbInstance) {
+    throw new Error(`Firebase Realtime Database is not configured.`);
+  }
+  return rtdbInstance;
 }
 
 export const googleProvider = new GoogleAuthProvider();
