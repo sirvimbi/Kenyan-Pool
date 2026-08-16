@@ -5,12 +5,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      deploy_functions:
-        description: Deploy Firebase Functions as well as Hosting
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: read
@@ -18,9 +12,6 @@ permissions:
 concurrency:
   group: firebase-production
   cancel-in-progress: false
-
-env:
-  FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
 
 jobs:
   deploy:
@@ -60,20 +51,26 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Verify Firebase authentication and project
+      - name: Validate deployment configuration
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: |
           test -n "$FIREBASE_PROJECT_ID" || { echo 'FIREBASE_PROJECT_ID secret is not configured'; exit 1; }
           test -n "$GOOGLE_APPLICATION_CREDENTIALS" || { echo 'Google credentials were not created'; exit 1; }
           test -s "$GOOGLE_APPLICATION_CREDENTIALS" || { echo 'Google credentials file is empty'; exit 1; }
           firebase projects:list --non-interactive >/dev/null
-          firebase use "$FIREBASE_PROJECT_ID" --non-interactive
 
       - name: Deploy Firebase Hosting
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: firebase deploy --project "$FIREBASE_PROJECT_ID" --only hosting --non-interactive
 
       - name: Deploy Firebase Functions
-        if: ${{ github.event_name == 'push' || inputs.deploy_functions == true }}
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: firebase deploy --project "$FIREBASE_PROJECT_ID" --only functions --non-interactive
 
       - name: Print production URL
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: echo "Firebase Hosting: https://${FIREBASE_PROJECT_ID}.web.app"
