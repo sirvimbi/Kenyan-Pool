@@ -51,7 +51,9 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   const [connected, setConnected] = useState<boolean>(false);
   const lastOpponentUidRef = useRef<string | null>(null);
   const hostHeartbeatRef = useRef<number>(0);
-  const roomDataRef = useRef<any>(null);
+  const hostUidRef = useRef<string | null>(null);
+  const roomDataRef = useRef<{ state: HUDState | null }>({ state: null });
+  const currentPresenceRef = useRef<any>(null);
   const isHostRef = useRef(isHost);
   const roomIdRef = useRef(roomId);
 
@@ -66,9 +68,8 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     return () => off(connectedRef);
   }, []);
 
-  // Keep every active client presence alive independently of the host.
-  // This lets the current authority apply a timeout when a player locks
-  // their device or loses connectivity without freezing the whole room.
+  // Presence is queued before the online flag is written. This prevents a
+  // short disconnect during startup from leaving a player marked online.
   useEffect(() => {
     if (!roomId || !user?.uid || !isFirebaseConfigured) return;
     const db = getRtdb();
@@ -80,9 +81,9 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
       update(presenceRef, { online: true, heartbeatAt: serverTimestamp() }).catch(() => {});
     };
 
+    onDisconnect(presenceRef).update({ online: false, heartbeatAt: serverTimestamp() }).catch(() => {});
     publish();
     interval = setInterval(publish, PLAYER_HEARTBEAT_MS);
-    onDisconnect(presenceRef).update({ online: false, heartbeatAt: serverTimestamp() }).catch(() => {});
 
     return () => {
       if (interval) clearInterval(interval);
@@ -213,40 +214,69 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // Narrow listeners: state, balls, aim, rematch and authority metadata are
+  // independent streams. The old room-level onValue listener re-downloaded
+  // the entire room whenever a 25-Hz ball snapshot, heartbeat or aim update
+  // changed. Firebase recommends listeners as low in the tree as practical.
   useEffect(() => {
     if (!roomId || !isFirebaseConfigured) return;
     const db = getRtdb();
-    const roomRef = ref(db, `rooms/${roomId}`);
+    const stateRef = ref(db, `rooms/${roomId}/state`);
+    const ballsRef = ref(db, `rooms/${roomId}/balls`);
+    const aimRef = ref(db, `rooms/${roomId}/activeAim`);
+    const rematchRef = ref(db, `rooms/${roomId}/rematchVotes`);
+    const hostRef = ref(db, `rooms/${roomId}/hostUid`);
+    const heartbeatRef = ref(db, `rooms/${roomId}/hostHeartbeatAt`);
 
-    const unsub = onValue(roomRef, (snapshot: DataSnapshot) => {
-      const data = snapshot.val();
-      roomDataRef.current = data;
-      if (data) {
-        const state = data.state || null;
-        if (state) {
-          state.players = (state.players || []).map((p: any) => ({
-            ...p,
-            score: p.score || 0,
-            balance: p.balance || 0,
-            name: p.name || 'Unknown',
-            uid: p.uid || ''
-          }));
-        }
-        hostHeartbeatRef.current = typeof data.hostHeartbeatAt === 'number'
-          ? data.hostHeartbeatAt
-          : (typeof data.updatedAt === 'number' ? data.updatedAt : hostHeartbeatRef.current);
-        setGameState(state);
-        setBalls(data.balls || null);
-        setActiveAim(data.activeAim || null);
-        setRematchVotes(data.rematchVotes || {});
-      } else {
+    const onState = onValue(stateRef, (snapshot) => {
+      const raw = snapshot.val();
+      if (!raw) {
+        roomDataRef.current.state = null;
         setGameState(null);
-        setBalls(null);
-        setActiveAim(null);
+        return;
       }
+      const state = raw as HUDState;
+      state.players = (state.players || []).map((p: any) => ({
+        ...p,
+        score: p.score || 0,
+        balance: p.balance || 0,
+        name: p.name || 'Unknown',
+        uid: p.uid || ''
+      }));
+      roomDataRef.current.state = state;
+      setGameState(state);
     });
-    return () => off(roomRef);
+    const onBalls = onValue(ballsRef, (snapshot) => setBalls(snapshot.val() || null));
+    const onAim = onValue(aimRef, (snapshot) => setActiveAim(snapshot.val() || null));
+    const onRematch = onValue(rematchRef, (snapshot) => setRematchVotes(snapshot.val() || {}));
+    const onHost = onValue(hostRef, (snapshot) => { hostUidRef.current = snapshot.val() || null; });
+    const onHeartbeat = onValue(heartbeatRef, (snapshot) => {
+      const value = snapshot.val();
+      if (typeof value === 'number') hostHeartbeatRef.current = value;
+    });
+
+    return () => {
+      off(stateRef, 'value', onState);
+      off(ballsRef, 'value', onBalls);
+      off(aimRef, 'value', onAim);
+      off(rematchRef, 'value', onRematch);
+      off(hostRef, 'value', onHost);
+      off(heartbeatRef, 'value', onHeartbeat);
+    };
   }, [roomId]);
+
+  // Only watch presence for the player whose turn is currently active.
+  useEffect(() => {
+    if (!roomId || !isFirebaseConfigured) return;
+    const currentUid = gameState?.players?.[gameState.currentPlayerIndex]?.uid;
+    if (!currentUid) {
+      currentPresenceRef.current = null;
+      return;
+    }
+    const presenceRef = ref(getRtdb(), `rooms/${roomId}/presence/${currentUid}`);
+    const unsub = onValue(presenceRef, (snapshot) => { currentPresenceRef.current = snapshot.val(); });
+    return () => off(presenceRef, 'value', unsub);
+  }, [roomId, gameState?.currentPlayerIndex, gameState?.players]);
 
   // Host heartbeat + automatic authority takeover. The takeover is a Firebase
   // transaction, so two clients cannot simultaneously become the authority.
@@ -260,7 +290,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
 
       if (isHostRef.current) {
         hostHeartbeatRef.current = Date.now();
-        await update(roomRef, { hostUid: user.uid, hostHeartbeatAt: serverTimestamp() }).catch(() => {});
+        await update(ref(db, `rooms/${id}`), { hostUid: user.uid, hostHeartbeatAt: serverTimestamp() }).catch(() => {});
         return;
       }
 
@@ -270,14 +300,14 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
       const claimRef = ref(db, `rooms/${id}/hostUid`);
       try {
         const result = await runTransaction(claimRef, (current) => {
-          if (current !== roomDataRef.current?.hostUid) return undefined;
-          const hb = roomDataRef.current?.hostHeartbeatAt;
-          if (typeof hb === 'number' && Date.now() - hb >= HOST_TIMEOUT_MS) return user.uid;
+          if (current !== hostUidRef.current) return undefined;
+          if (last && Date.now() - last >= HOST_TIMEOUT_MS) return user.uid;
           return undefined;
         });
         if (result.committed && result.snapshot.val() === user.uid) {
           console.warn('Network: Host heartbeat expired; promoting this client to authority.');
           setIsHost(true);
+          hostUidRef.current = user.uid;
           hostHeartbeatRef.current = Date.now();
           await update(roomRef, { hostUid: user.uid, hostHeartbeatAt: serverTimestamp() }).catch(() => {});
         }
@@ -295,12 +325,11 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     if (!roomId || !isHost || !connected || !isFirebaseConfigured) return;
     const db = getRtdb();
     const interval = setInterval(async () => {
-      const data = roomDataRef.current;
-      const state: HUDState | null = data?.state || null;
+      const state: HUDState | null = roomDataRef.current.state;
       if (!state || state.phase === 'roundEnd' || !state.players?.length) return;
       const current = state.players[state.currentPlayerIndex];
       if (!current?.uid || current.isAI || current.uid === user?.uid) return;
-      const presence = data?.presence?.[current.uid];
+      const presence = currentPresenceRef.current;
       const heartbeat = presence?.heartbeatAt;
       const offline = presence?.online === false;
       const stale = typeof heartbeat === 'number' && Date.now() - heartbeat > PLAYER_TIMEOUT_MS;
@@ -335,6 +364,8 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   const updateAuthoritativeState = useCallback((state: HUDState, balls: BallState[]) => {
     if (!roomId) return;
     const db = getRtdb();
+    // Multi-path update keeps state and ball snapshots atomically aligned while
+    // allowing clients to listen to each stream independently.
     update(ref(db, `rooms/${roomId}`), {
       state,
       balls: balls || [],
@@ -346,18 +377,16 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
 
   const sendMove = useCallback((aimAngle: number, power: number, spin: Vec2 & { pos?: Vec2 }) => {
     if (!roomId) return;
-    const db = getRtdb();
-    const intentRef = push(ref(db, `rooms/${roomId}/intents`));
+    const intentRef = push(ref(getRtdb(), `rooms/${roomId}/intents`));
     set(intentRef, { aimAngle, power, spin, createdAt: serverTimestamp(), uid: user?.uid }).catch(() => {});
-  }, [roomId, user]);
+  }, [roomId, user?.uid]);
 
   const sendAimState = useCallback((aimAngle: number, power: number, spin: Vec2, pos?: Vec2) => {
     if (!roomId) return;
-    const db = getRtdb();
-    update(ref(db, `rooms/${roomId}/activeAim`), {
+    update(ref(getRtdb(), `rooms/${roomId}/activeAim`), {
       aimAngle, power, spin, pos: pos || null, updatedAt: serverTimestamp(), uid: user?.uid
     }).catch(() => {});
-  }, [roomId, user]);
+  }, [roomId, user?.uid]);
 
   const voteRematch = useCallback((uid: string) => {
     if (!roomId) return;
