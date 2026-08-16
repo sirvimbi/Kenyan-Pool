@@ -51,13 +51,13 @@ jobs:
           exit 1
 
       - name: Desktop browser smoke
-        run: npx --yes playwright@latest screenshot --browser=chromium --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/desktop.png
+        run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='1440,900' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/desktop.png
 
       - name: Mobile portrait smoke
         run: npx --yes playwright@latest screenshot --browser=chromium --device='iPhone 13' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/mobile-portrait.png
 
       - name: Mobile landscape smoke
-        run: npx --yes playwright@latest screenshot --browser=chromium --device='iPhone 13 landscape' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/mobile-landscape.png
+        run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='844,390' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/mobile-landscape.png
 
       - name: Upload browser screenshots
         if: always()
