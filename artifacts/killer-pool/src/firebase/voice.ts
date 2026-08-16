@@ -1,5 +1,5 @@
 import {
-  ref, set, update, onValue, off, push, child, onChildAdded,
+  ref, set, update, onValue, push, child, onChildAdded,
   serverTimestamp, remove, onDisconnect
 } from 'firebase/database';
 import { getRtdb, isFirebaseConfigured } from './config';
@@ -45,8 +45,9 @@ export class VoiceManager {
       const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextCtor) return null;
       if (!this.audioContext) this.audioContext = new AudioContextCtor();
-      if (this.audioContext.state === 'suspended') await this.audioContext.resume();
-      return this.audioContext;
+      const ctx = this.audioContext;
+      if (ctx.state === 'suspended') await ctx.resume();
+      return ctx;
     } catch (err) {
       console.warn('Voice: AudioContext unavailable', err);
       return null;
@@ -94,9 +95,10 @@ export class VoiceManager {
 
   setVolume(vol: number) {
     this.volume = Math.max(0, Math.min(1, vol / 100));
+    const ctx = this.audioContext;
     this.peers.forEach(peer => {
       peer.audio.volume = this.volume;
-      if (peer.gain && this.audioContext) peer.gain.gain.setTargetAtTime(this.volume, this.audioContext.currentTime, 0.01);
+      if (peer.gain && ctx) peer.gain.gain.setTargetAtTime(this.volume, ctx.currentTime, 0.01);
     });
   }
 
@@ -109,7 +111,6 @@ export class VoiceManager {
 
     const db = getRtdb();
     const presenceRef = ref(db, `${PEERS_PATH}/${roomId}/presence/${userId}`);
-
     await onDisconnect(presenceRef).update({ online: false, leftAt: serverTimestamp() }).catch(() => {});
     await set(presenceRef, { online: true, joinedAt: serverTimestamp() });
 
@@ -118,7 +119,6 @@ export class VoiceManager {
       const data = snap.val() || {};
       Object.keys(data).forEach(peerId => {
         if (peerId === userId || !data[peerId]?.online || this.peers.has(peerId)) return;
-        // Deterministic offerer prevents offer glare.
         if (userId < peerId) {
           this.setupPeer(peerId, true).catch(err => console.warn('Voice: offer setup failed', err));
         }
@@ -164,10 +164,6 @@ export class VoiceManager {
     pc.ontrack = async event => {
       const stream = event.streams?.[0] || new MediaStream([event.track]);
       audio.srcObject = stream;
-
-      // Route remote audio through the already user-activated AudioContext.
-      // This avoids browser autoplay blocking on the dynamically-created
-      // <audio> element, while retaining the element as a fallback.
       const ctx = await this.ensureAudioContext();
       if (ctx && !entry.source) {
         try {
@@ -179,13 +175,10 @@ export class VoiceManager {
           console.warn('Voice: WebAudio routing failed; using HTMLAudio fallback', err);
         }
       }
-
       audio.play().catch(() => {
         const resume = async () => {
-          try { await this.ensureAudioContext(); } catch {}
+          await this.ensureAudioContext().catch(() => null);
           audio.play().catch(() => {});
-          document.removeEventListener('pointerdown', resume);
-          document.removeEventListener('touchstart', resume);
         };
         document.addEventListener('pointerdown', resume, { once: true, passive: true });
         document.addEventListener('touchstart', resume, { once: true, passive: true });
@@ -204,6 +197,14 @@ export class VoiceManager {
         await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => console.warn('Voice: queued ICE rejected', err));
       }
     };
+
+    if (!isOfferer && remoteOffer && !pc.currentRemoteDescription) {
+      await pc.setRemoteDescription(new RTCSessionDescription(remoteOffer));
+      await applyPendingCandidates();
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await update(signalRef, { answer: { type: answer.type, sdp: answer.sdp }, updatedAt: serverTimestamp() });
+    }
 
     const signalUnsub = onValue(signalRef, async snap => {
       const signal = snap.val() || {};
@@ -259,14 +260,6 @@ export class VoiceManager {
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
       await update(signalRef, { offer: { type: offer.type, sdp: offer.sdp }, answer: null, updatedAt: serverTimestamp() });
-    } else if (remoteOffer && !pc.currentRemoteDescription) {
-      // onChildAdded already supplies the offer; this explicit path also makes
-      // the callee deterministic when the listener fires during peer creation.
-      await pc.setRemoteDescription(new RTCSessionDescription(remoteOffer));
-      await applyPendingCandidates();
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await update(signalRef, { answer: { type: answer.type, sdp: answer.sdp }, updatedAt: serverTimestamp() });
     }
   }
 
