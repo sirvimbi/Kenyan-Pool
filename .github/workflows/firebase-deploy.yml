@@ -1,0 +1,49 @@
+name: Deploy to Firebase
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy to Firebase
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.4
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build game client
+        run: pnpm --filter @workspace/killer-pool run build
+
+      - name: Setup Firebase CLI
+        run: npm install --global firebase-tools
+
+      - name: Deploy Firebase Hosting and Functions
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: firebase deploy --project "${{ secrets.FIREBASE_PROJECT_ID }}" --only hosting,functions --non-interactive --token "$FIREBASE_TOKEN"
