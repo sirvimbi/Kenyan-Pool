@@ -43,7 +43,15 @@ jobs:
       - name: Setup Firebase CLI
         run: npm install --global firebase-tools
 
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}'
+
+      - name: Verify Google authentication
+        run: gcloud auth list --filter=status:ACTIVE --format='value(account)'
+
       - name: Deploy Firebase Hosting and Functions
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        run: firebase deploy --project "${{ secrets.FIREBASE_PROJECT_ID }}" --only hosting,functions --non-interactive --token "$FIREBASE_TOKEN"
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
+        run: firebase deploy --project "${{ secrets.FIREBASE_PROJECT_ID }}" --only hosting,functions --non-interactive
