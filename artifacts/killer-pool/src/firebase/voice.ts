@@ -1,11 +1,25 @@
-import { ref, set, update, onValue, off, push, child, onChildAdded, serverTimestamp, remove, onDisconnect } from "firebase/database";
-import { getRtdb, isFirebaseConfigured } from "./config";
+import {
+  ref, set, update, onValue, off, push, child, onChildAdded,
+  serverTimestamp, remove, onDisconnect
+} from 'firebase/database';
+import { getRtdb, isFirebaseConfigured } from './config';
 
-const PEERS_PATH = "voice_peers";
-interface PeerConnection { pc: RTCPeerConnection; audio: HTMLAudioElement; unsubscribers: (() => void)[]; }
-function pairKey(a: string, b: string) { return [a, b].sort().join("__"); }
+const PEERS_PATH = 'voice_peers';
+
+interface PeerConnection {
+  pc: RTCPeerConnection;
+  audio: HTMLAudioElement;
+  unsubscribers: (() => void)[];
+}
+
 function iceServers(): RTCIceServer[] {
-  const servers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }];
+  const servers: RTCIceServer[] = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+  ];
   const env = (import.meta as any).env || {};
   if (env.VITE_TURN_URL && env.VITE_TURN_USERNAME && env.VITE_TURN_CREDENTIAL) {
     servers.push({ urls: env.VITE_TURN_URL, username: env.VITE_TURN_USERNAME, credential: env.VITE_TURN_CREDENTIAL });
@@ -21,12 +35,19 @@ export class VoiceManager {
   private roomId: string | null = null;
   private userId: string | null = null;
   private isPrimed = false;
+  private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   async startLocalStream() {
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 }, video: false });
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
       return this.localStream;
-    } catch (err) { console.error("Voice: Error accessing microphone:", err); throw err; }
+    } catch (err) {
+      console.error('Voice: microphone access failed:', err);
+      throw err;
+    }
   }
 
   async prime() {
@@ -35,76 +56,111 @@ export class VoiceManager {
       const AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
       if (AudioContext) {
         const ctx = new AudioContext();
-        if (ctx.state === "suspended") await ctx.resume();
-        const osc = ctx.createOscillator(); const gain = ctx.createGain();
-        gain.gain.value = 0; osc.connect(gain); gain.connect(ctx.destination);
-        osc.start(); osc.stop(ctx.currentTime + 0.05);
+        if (ctx.state === 'suspended') await ctx.resume();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.08);
       }
       this.isPrimed = true;
-    } catch (e) { console.warn("Voice: Audio priming failed", e); }
+    } catch (err) {
+      console.warn('Voice: audio priming failed', err);
+    }
   }
 
-  setVolume(vol: number) { this.volume = Math.max(0, Math.min(1, vol / 100)); this.peers.forEach(p => { p.audio.volume = this.volume; }); }
+  setVolume(vol: number) {
+    this.volume = Math.max(0, Math.min(1, vol / 100));
+    this.peers.forEach(peer => { peer.audio.volume = this.volume; });
+  }
 
   async joinRoom(roomId: string, userId: string) {
     if (!isFirebaseConfigured || !this.localStream) return;
     await this.stop();
-    this.roomId = roomId; this.userId = userId;
+    this.roomId = roomId;
+    this.userId = userId;
     const db = getRtdb();
     const presenceRef = ref(db, `${PEERS_PATH}/${roomId}/presence/${userId}`);
+
     await onDisconnect(presenceRef).update({ online: false, leftAt: serverTimestamp() }).catch(() => {});
     await set(presenceRef, { online: true, joinedAt: serverTimestamp() });
 
+    // The established signaling layout is deliberately retained here because
+    // Firebase rules already permit each user's nested signal branch.
     const allPresenceRef = ref(db, `${PEERS_PATH}/${roomId}/presence`);
-    const onPresence = onValue(allPresenceRef, snap => {
+    const presenceListener = onValue(allPresenceRef, snap => {
       const data = snap.val() || {};
       Object.keys(data).forEach(peerId => {
         if (peerId === userId || !data[peerId]?.online || this.peers.has(peerId)) return;
-        this.setupPeer(peerId, userId < peerId).catch(err => {
-          console.warn("Voice: peer setup failed", peerId, err);
-          this.closePeer(peerId);
-        });
+        if (userId < peerId) {
+          this.setupPeer(peerId, true).catch(err => console.warn('Voice: offer setup failed', err));
+        }
       });
     });
-    this.unsubscribers.push(() => off(allPresenceRef, "value", onPresence));
+    this.unsubscribers.push(() => off(allPresenceRef, 'value', presenceListener));
+
+    // Callees listen for offers addressed to their own branch.
+    const incomingSignalsRef = ref(db, `${PEERS_PATH}/${roomId}/signals/${userId}`);
+    const incomingListener = onChildAdded(incomingSignalsRef, snap => {
+      const peerId = snap.key;
+      const signal = snap.val();
+      if (!peerId || !signal?.offer || this.peers.has(peerId)) return;
+      this.setupPeer(peerId, false, signal.offer).catch(err => console.warn('Voice: answer setup failed', err));
+    });
+    this.unsubscribers.push(() => off(incomingSignalsRef, 'child_added', incomingListener));
   }
 
-  private async setupPeer(peerId: string, isOfferer: boolean) {
+  private async setupPeer(peerId: string, isOfferer: boolean, remoteOffer?: RTCSessionDescriptionInit) {
     if (!this.roomId || !this.userId || this.peers.has(peerId)) return;
     const db = getRtdb();
-    const pair = pairKey(this.userId, peerId);
-    const signalRef = ref(db, `${PEERS_PATH}/${this.roomId}/signals/${pair}`);
-    const peerEntry: PeerConnection = {
-      pc: new RTCPeerConnection({ iceServers: iceServers(), bundlePolicy: "max-bundle", rtcpMuxPolicy: "require", iceCandidatePoolSize: 4 }),
-      audio: new Audio(),
-      unsubscribers: [],
-    };
-    const pc = peerEntry.pc; const audio = peerEntry.audio;
+    const signalPath = isOfferer
+      ? `${PEERS_PATH}/${this.roomId}/signals/${peerId}/${this.userId}`
+      : `${PEERS_PATH}/${this.roomId}/signals/${this.userId}/${peerId}`;
+    const signalRef = ref(db, signalPath);
     const pendingCandidates: RTCIceCandidateInit[] = [];
-    audio.autoplay = true; audio.volume = this.volume; audio.style.display = "none";
+
+    const pc = new RTCPeerConnection({
+      iceServers: iceServers(),
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+      iceCandidatePoolSize: 4,
+    });
+    const audio = new Audio();
+    audio.autoplay = true;
+    audio.volume = this.volume;
+    audio.style.display = 'none';
     document.body.appendChild(audio);
-    this.peers.set(peerId, peerEntry);
+    const entry: PeerConnection = { pc, audio, unsubscribers: [] };
+    this.peers.set(peerId, entry);
+
     this.localStream?.getTracks().forEach(track => pc.addTrack(track, this.localStream!));
 
     pc.ontrack = event => {
-      const stream = event.streams[0]; if (!stream) return;
+      const stream = event.streams[0];
+      if (!stream) return;
       audio.srcObject = stream;
       audio.play().catch(() => {
-        const resume = () => { audio.play().catch(() => {}); document.removeEventListener("pointerdown", resume); document.removeEventListener("touchstart", resume); };
-        document.addEventListener("pointerdown", resume, { once: true, passive: true });
-        document.addEventListener("touchstart", resume, { once: true, passive: true });
+        const resume = () => {
+          audio.play().catch(() => {});
+          document.removeEventListener('pointerdown', resume);
+          document.removeEventListener('touchstart', resume);
+        };
+        document.addEventListener('pointerdown', resume, { once: true, passive: true });
+        document.addEventListener('touchstart', resume, { once: true, passive: true });
       });
     };
+
     pc.onicecandidate = event => {
       if (!event.candidate || !this.userId) return;
       push(child(signalRef, `candidates/${this.userId}`), event.candidate.toJSON()).catch(() => {});
     };
-    pc.onconnectionstatechange = () => { if (pc.connectionState === "failed" || pc.connectionState === "closed") this.closePeer(peerId); };
 
     const applyPendingCandidates = async () => {
       if (!pc.remoteDescription || pendingCandidates.length === 0) return;
-      const candidates = pendingCandidates.splice(0);
-      for (const candidate of candidates) await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+      const pending = pendingCandidates.splice(0);
+      for (const candidate of pending) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+      }
     };
 
     const signalListener = onValue(signalRef, async snap => {
@@ -120,42 +176,76 @@ export class VoiceManager {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
           await applyPendingCandidates();
         }
-      } catch (err) { console.warn("Voice: signaling negotiation failed", err); this.closePeer(peerId); }
+      } catch (err) {
+        console.warn('Voice: negotiation failed', err);
+        this.closePeer(peerId);
+        if (isOfferer) this.scheduleRetry(peerId);
+      }
     });
-    peerEntry.unsubscribers.push(() => off(signalRef, "value", signalListener));
+    entry.unsubscribers.push(() => off(signalRef, 'value', signalListener));
 
     const remoteCandidatesRef = child(signalRef, `candidates/${peerId}`);
     const candidateListener = onChildAdded(remoteCandidatesRef, snap => {
-      const candidate = snap.val() as RTCIceCandidateInit | null; if (!candidate) return;
+      const candidate = snap.val() as RTCIceCandidateInit | null;
+      if (!candidate) return;
       if (pc.remoteDescription) pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
       else pendingCandidates.push(candidate);
     });
-    peerEntry.unsubscribers.push(() => off(remoteCandidatesRef, "child_added", candidateListener));
+    entry.unsubscribers.push(() => off(remoteCandidatesRef, 'child_added', candidateListener));
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        this.closePeer(peerId);
+        if (isOfferer) this.scheduleRetry(peerId);
+      }
+    };
 
     if (isOfferer) {
+      await remove(signalRef).catch(() => {});
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
       await update(signalRef, { offer: { type: offer.type, sdp: offer.sdp }, answer: null, updatedAt: serverTimestamp() });
     }
   }
 
+  private scheduleRetry(peerId: string) {
+    if (!this.userId || !this.roomId || this.retryTimers.has(peerId)) return;
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(peerId);
+      if (!this.peers.has(peerId)) this.setupPeer(peerId, this.userId! < peerId).catch(() => {});
+    }, 1500);
+    this.retryTimers.set(peerId, timer);
+  }
+
   private closePeer(peerId: string) {
-    const entry = this.peers.get(peerId); if (!entry) return;
-    entry.unsubscribers.forEach(u => u()); entry.pc.close(); entry.audio.pause(); entry.audio.srcObject = null; entry.audio.remove();
+    const entry = this.peers.get(peerId);
+    if (!entry) return;
+    entry.unsubscribers.forEach(unsubscribe => unsubscribe());
+    entry.pc.close();
+    entry.audio.pause();
+    entry.audio.srcObject = null;
+    entry.audio.remove();
     this.peers.delete(peerId);
   }
 
   async stop(roomId?: string, userId?: string) {
-    const rid = roomId || this.roomId; const uid = userId || this.userId; const peerIds = [...this.peers.keys()];
+    const rid = roomId || this.roomId;
+    const uid = userId || this.userId;
     if (rid && uid && isFirebaseConfigured) {
       const removals: Record<string, null> = {};
       removals[`${PEERS_PATH}/${rid}/presence/${uid}`] = null;
-      for (const peerId of peerIds) removals[`${PEERS_PATH}/${rid}/signals/${pairKey(uid, peerId)}`] = null;
       await update(ref(getRtdb()), removals).catch(() => {});
     }
-    peerIds.forEach(peerId => this.closePeer(peerId));
-    this.unsubscribers.forEach(u => u()); this.unsubscribers = [];
-    if (this.localStream) { this.localStream.getTracks().forEach(t => t.stop()); this.localStream = null; }
-    this.roomId = null; this.userId = null;
+    this.retryTimers.forEach(timer => clearTimeout(timer));
+    this.retryTimers.clear();
+    [...this.peers.keys()].forEach(peerId => this.closePeer(peerId));
+    this.unsubscribers.forEach(unsubscribe => unsubscribe());
+    this.unsubscribers = [];
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => track.stop());
+      this.localStream = null;
+    }
+    this.roomId = null;
+    this.userId = null;
   }
 }
