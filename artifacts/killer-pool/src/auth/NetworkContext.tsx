@@ -7,11 +7,17 @@ import { getRtdb, isFirebaseConfigured } from '../firebase/config';
 import { HUDState, BallState, Vec2 } from '@workspace/game-core';
 import { useAuth } from './AuthContext';
 
+interface ActiveAim {
+  aimAngle: number;
+  power: number;
+  spin: Vec2 & { pos?: Vec2 };
+}
+
 interface NetworkContextType {
   roomId: string | null;
   gameState: HUDState | null;
   balls: BallState[] | null;
-  activeAim: { aimAngle: number; power: number; spin: Vec2 & { pos?: Vec2 } } | null;
+  activeAim: ActiveAim | null;
   rematchVotes: Record<string, boolean>;
   isHost: boolean;
   connected: boolean;
@@ -29,7 +35,6 @@ const NetworkContext = createContext<NetworkContextType | null>(null);
 const HOST_HEARTBEAT_MS = 1000;
 const HOST_TIMEOUT_MS = 4500;
 const PLAYER_HEARTBEAT_MS = 2000;
-const PLAYER_TIMEOUT_MS = 7000;
 
 type RoomSnapshot = {
   state: HUDState;
@@ -44,7 +49,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [gameState, setGameState] = useState<HUDState | null>(null);
   const [balls, setBalls] = useState<BallState[] | null>(null);
-  const [activeAim, setActiveAim] = useState<RoomSnapshot['state'] extends HUDState ? { aimAngle: number; power: number; spin: Vec2 & { pos?: Vec2 } } | null : never>(null);
+  const [activeAim, setActiveAim] = useState<ActiveAim | null>(null);
   const [rematchVotes, setRematchVotes] = useState<Record<string, boolean>>({});
   const [isHost, setIsHost] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -53,11 +58,9 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   const hostHeartbeatRef = useRef<number>(0);
   const hostUidRef = useRef<string | null>(null);
   const latestStateRef = useRef<HUDState | null>(null);
-  const currentPresenceRef = useRef<any>(null);
   const isHostRef = useRef(isHost);
   const roomIdRef = useRef(roomId);
   const snapshotSeqRef = useRef(0);
-  const currentPlayerUid = gameState?.players?.[gameState.currentPlayerIndex]?.uid || null;
 
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
   useEffect(() => { roomIdRef.current = roomId; }, [roomId]);
@@ -111,7 +114,6 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     const db = getRtdb();
     const waitingSlotRef = ref(db, `matchmaking/${stake}/waitingSlot`);
     let localMatched = false;
-
     const unsubSlot = onValue(waitingSlotRef, async snap => {
       if (localMatched) return;
       const slot = snap.val();
@@ -148,9 +150,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
       if (localMatched) return;
       try {
         await runTransaction(waitingSlotRef, current => {
-          if (!current) {
-            return { hostUid: uid, hostName: name, status: 'waiting', timestamp: Date.now(), preferredGuestUid: priorityUid || null };
-          }
+          if (!current) return { hostUid: uid, hostName: name, status: 'waiting', timestamp: Date.now(), preferredGuestUid: priorityUid || null };
           if (current.status === 'waiting') {
             const preferred = current.preferredGuestUid === uid;
             const stale = Date.now() - current.timestamp > 15000;
@@ -169,7 +169,6 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
         if (!String(err).includes('permission_denied')) console.error('Matchmaking Transaction Error:', err);
       }
     };
-
     attemptMatch();
     const interval = setInterval(() => { if (!localMatched) attemptMatch(); }, 4000);
     return () => {
@@ -179,9 +178,6 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // One authoritative snapshot contains state AND balls. Firebase can deliver
-  // two independent listeners in either order; that was the source of clients
-  // occasionally combining a new state with an old ball array.
   useEffect(() => {
     if (!roomId || !isFirebaseConfigured) return;
     const db = getRtdb();
@@ -221,22 +217,8 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     };
   }, [roomId]);
 
-  useEffect(() => {
-    snapshotSeqRef.current = 0;
-  }, [roomId]);
+  useEffect(() => { snapshotSeqRef.current = 0; }, [roomId]);
 
-  useEffect(() => {
-    if (!roomId || !currentPlayerUid || !isFirebaseConfigured) {
-      currentPresenceRef.current = null;
-      return;
-    }
-    const presenceRef = ref(getRtdb(), `rooms/${roomId}/presence/${currentPlayerUid}`);
-    const unsub = onValue(presenceRef, snap => { currentPresenceRef.current = snap.val(); });
-    return () => off(presenceRef, 'value', unsub);
-  }, [roomId, currentPlayerUid]);
-
-  // Host heartbeat and deterministic authority takeover. The new host does
-  // not restart the rack; it continues from the latest authoritative snapshot.
   useEffect(() => {
     if (!roomId || !user?.uid || !isFirebaseConfigured) return;
     const db = getRtdb();
@@ -271,43 +253,6 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(interval);
   }, [roomId, user?.uid, connected]);
 
-  // Only the authority can apply an offline player's timeout. A new authority
-  // therefore keeps the room playable when the previous authority disappears.
-  useEffect(() => {
-    if (!roomId || !isHost || !connected || !isFirebaseConfigured) return;
-    const db = getRtdb();
-    const interval = setInterval(async () => {
-      const state = latestStateRef.current;
-      if (!state || state.phase === 'roundEnd' || !state.players?.length) return;
-      const current = state.players[state.currentPlayerIndex];
-      if (!current?.uid || current.isAI || current.uid === user?.uid) return;
-      const presence = currentPresenceRef.current;
-      const heartbeat = presence?.heartbeatAt;
-      if (presence?.online !== false && !(typeof heartbeat === 'number' && Date.now() - heartbeat > PLAYER_TIMEOUT_MS)) return;
-      await runTransaction(ref(db, `rooms/${roomId}/state`), currentState => {
-        if (!currentState || currentState.phase === 'roundEnd' || currentState.currentPlayerIndex !== state.currentPlayerIndex) return undefined;
-        const players = currentState.players.map((p: any) => ({ ...p }));
-        const idx = currentState.currentPlayerIndex;
-        players[idx].fouls = (players[idx].fouls || 0) + 1;
-        let next = (idx + 1) % players.length;
-        let tries = 0;
-        while (players[next]?.isBenched && tries < players.length) { next = (next + 1) % players.length; tries++; }
-        return {
-          ...currentState,
-          players,
-          currentPlayerIndex: next,
-          phase: 'aiming',
-          timeLeft: 60,
-          power: 0,
-          aimAngle: 0,
-          spin: { x: 0, z: 0 },
-          shotResult: { type: 'foul_wrong', pottedBalls: [], scoreChange: 0, message: `⚠ ${players[idx].name} timed out/offline — turn forfeited`, extraTurn: false } as any
-        };
-      }).catch(() => {});
-    }, 1500);
-    return () => clearInterval(interval);
-  }, [roomId, isHost, connected, user?.uid]);
-
   const updateAuthoritativeState = useCallback((state: HUDState, nextBalls: BallState[]) => {
     if (!roomId || !user?.uid || !isHostRef.current) return;
     const db = getRtdb();
@@ -332,13 +277,7 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
   const sendMove = useCallback((aimAngle: number, power: number, spin: Vec2 & { pos?: Vec2 }) => {
     if (!roomId || !user?.uid) return;
     const intentRef = push(ref(getRtdb(), `rooms/${roomId}/intents`));
-    set(intentRef, {
-      uid: user.uid,
-      aimAngle,
-      power,
-      spin,
-      createdAt: serverTimestamp()
-    }).catch(() => {});
+    set(intentRef, { uid: user.uid, aimAngle, power, spin, createdAt: serverTimestamp() }).catch(() => {});
   }, [roomId, user?.uid]);
 
   const sendAimState = useCallback((aimAngle: number, power: number, spin: Vec2, pos?: Vec2) => {
@@ -361,18 +300,10 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     if (!roomId || !user?.uid) return;
     const participants = players.map(p => ({ uid: p.uid, name: p.name, isAI: !!p.isAI }));
     update(ref(getRtdb(), `rooms/${roomId}`), {
-      status: 'active',
-      stake,
-      participants,
+      status: 'active', stake, participants,
       previousScores: previousScores || null,
-      rematchVotes: null,
-      snapshot: null,
-      state: null,
-      balls: null,
-      activeAim: null,
-      updatedAt: serverTimestamp(),
-      hostUid: user.uid,
-      hostHeartbeatAt: serverTimestamp()
+      rematchVotes: null, snapshot: null, state: null, balls: null, activeAim: null,
+      updatedAt: serverTimestamp(), hostUid: user.uid, hostHeartbeatAt: serverTimestamp()
     }).catch(() => {});
   }, [roomId, user?.uid]);
 
@@ -380,16 +311,11 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     const id = roomIdRef.current;
     const uid = user?.uid;
     if (!id || !uid || !isFirebaseConfigured) {
-      setRoomId(null);
-      setIsHost(false);
-      return;
+      setRoomId(null); setIsHost(false); return;
     }
     const db = getRtdb();
-    if (isHostRef.current) {
-      remove(ref(db, `rooms/${id}`)).catch(() => {});
-    } else {
-      update(ref(db, `rooms/${id}/presence/${uid}`), { online: false, heartbeatAt: serverTimestamp() }).catch(() => {});
-    }
+    if (isHostRef.current) remove(ref(db, `rooms/${id}`)).catch(() => {});
+    else update(ref(db, `rooms/${id}/presence/${uid}`), { online: false, heartbeatAt: serverTimestamp() }).catch(() => {});
     setRoomId(null);
     setIsHost(false);
     isHostRef.current = false;
@@ -402,21 +328,9 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <NetworkContext.Provider value={{
-      roomId,
-      gameState,
-      balls,
-      activeAim,
-      rematchVotes,
-      isHost,
-      connected,
-      joinQueue,
-      playVsAI,
-      updateAuthoritativeState,
-      sendMove,
-      sendAimState,
-      voteRematch,
-      resetRoom,
-      leaveRoom
+      roomId, gameState, balls, activeAim, rematchVotes, isHost, connected,
+      joinQueue, playVsAI, updateAuthoritativeState, sendMove, sendAimState,
+      voteRematch, resetRoom, leaveRoom
     }}>
       {children}
     </NetworkContext.Provider>
