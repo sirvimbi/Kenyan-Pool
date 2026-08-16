@@ -1,10 +1,14 @@
 name: Firebase Production Deploy
 
-"on":
+on:
   push:
     branches:
       - main
   workflow_dispatch:
+
+concurrency:
+  group: firebase-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -43,13 +47,7 @@ jobs:
           export_environment_variables: true
 
       - name: Deploy Hosting and Functions
-        env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: |
-          test -n "$FIREBASE_PROJECT_ID"
-          firebase deploy --project "$FIREBASE_PROJECT_ID" --only hosting,functions --non-interactive
+        run: firebase deploy --project kenyan-pool --only hosting,functions --non-interactive
 
       - name: Report production URL
-        env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: echo "Deployed to https://${FIREBASE_PROJECT_ID}.web.app"
+        run: echo "Deployed to https://kenyan-pool.web.app"
