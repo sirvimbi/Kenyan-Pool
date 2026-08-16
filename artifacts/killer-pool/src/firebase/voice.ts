@@ -9,6 +9,8 @@ const PEERS_PATH = 'voice_peers';
 interface PeerConnection {
   pc: RTCPeerConnection;
   audio: HTMLAudioElement;
+  gain?: GainNode;
+  source?: MediaStreamAudioSourceNode;
   unsubscribers: (() => void)[];
 }
 
@@ -35,14 +37,32 @@ export class VoiceManager {
   private roomId: string | null = null;
   private userId: string | null = null;
   private isPrimed = false;
+  private audioContext: AudioContext | null = null;
   private retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  private async ensureAudioContext(): Promise<AudioContext | null> {
+    try {
+      const AudioContextCtor = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextCtor) return null;
+      if (!this.audioContext) this.audioContext = new AudioContextCtor();
+      if (this.audioContext.state === 'suspended') await this.audioContext.resume();
+      return this.audioContext;
+    } catch (err) {
+      console.warn('Voice: AudioContext unavailable', err);
+      return null;
+    }
+  }
+
   async startLocalStream() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Voice chat requires a secure browser with microphone support.');
+    }
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: false,
       });
+      this.localStream.getAudioTracks().forEach(track => { track.enabled = true; });
       return this.localStream;
     } catch (err) {
       console.error('Voice: microphone access failed:', err);
@@ -51,17 +71,20 @@ export class VoiceManager {
   }
 
   async prime() {
-    if (this.isPrimed) return;
+    if (this.isPrimed) {
+      await this.ensureAudioContext();
+      return;
+    }
     try {
-      const AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (AudioContext) {
-        const ctx = new AudioContext();
-        if (ctx.state === 'suspended') await ctx.resume();
+      const ctx = await this.ensureAudioContext();
+      if (ctx) {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         gain.gain.value = 0;
-        osc.connect(gain); gain.connect(ctx.destination);
-        osc.start(); osc.stop(ctx.currentTime + 0.08);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.08);
       }
       this.isPrimed = true;
     } catch (err) {
@@ -71,7 +94,10 @@ export class VoiceManager {
 
   setVolume(vol: number) {
     this.volume = Math.max(0, Math.min(1, vol / 100));
-    this.peers.forEach(peer => { peer.audio.volume = this.volume; });
+    this.peers.forEach(peer => {
+      peer.audio.volume = this.volume;
+      if (peer.gain && this.audioContext) peer.gain.gain.setTargetAtTime(this.volume, this.audioContext.currentTime, 0.01);
+    });
   }
 
   async joinRoom(roomId: string, userId: string) {
@@ -79,43 +105,41 @@ export class VoiceManager {
     await this.stop();
     this.roomId = roomId;
     this.userId = userId;
+    await this.ensureAudioContext();
+
     const db = getRtdb();
     const presenceRef = ref(db, `${PEERS_PATH}/${roomId}/presence/${userId}`);
 
     await onDisconnect(presenceRef).update({ online: false, leftAt: serverTimestamp() }).catch(() => {});
     await set(presenceRef, { online: true, joinedAt: serverTimestamp() });
 
-    // The established signaling layout is deliberately retained here because
-    // Firebase rules already permit each user's nested signal branch.
     const allPresenceRef = ref(db, `${PEERS_PATH}/${roomId}/presence`);
-    const presenceListener = onValue(allPresenceRef, snap => {
+    const presenceUnsub = onValue(allPresenceRef, snap => {
       const data = snap.val() || {};
       Object.keys(data).forEach(peerId => {
         if (peerId === userId || !data[peerId]?.online || this.peers.has(peerId)) return;
+        // Deterministic offerer prevents offer glare.
         if (userId < peerId) {
           this.setupPeer(peerId, true).catch(err => console.warn('Voice: offer setup failed', err));
         }
       });
     });
-    this.unsubscribers.push(() => off(allPresenceRef, 'value', presenceListener));
+    this.unsubscribers.push(presenceUnsub);
 
-    // Callees listen for offers addressed to their own branch.
     const incomingSignalsRef = ref(db, `${PEERS_PATH}/${roomId}/signals/${userId}`);
-    const incomingListener = onChildAdded(incomingSignalsRef, snap => {
+    const incomingUnsub = onChildAdded(incomingSignalsRef, snap => {
       const peerId = snap.key;
       const signal = snap.val();
       if (!peerId || !signal?.offer || this.peers.has(peerId)) return;
       this.setupPeer(peerId, false, signal.offer).catch(err => console.warn('Voice: answer setup failed', err));
     });
-    this.unsubscribers.push(() => off(incomingSignalsRef, 'child_added', incomingListener));
+    this.unsubscribers.push(incomingUnsub);
   }
 
   private async setupPeer(peerId: string, isOfferer: boolean, remoteOffer?: RTCSessionDescriptionInit) {
     if (!this.roomId || !this.userId || this.peers.has(peerId)) return;
     const db = getRtdb();
-    const signalPath = isOfferer
-      ? `${PEERS_PATH}/${this.roomId}/signals/${peerId}/${this.userId}`
-      : `${PEERS_PATH}/${this.roomId}/signals/${this.userId}/${peerId}`;
+    const signalPath = `${PEERS_PATH}/${this.roomId}/signals/${isOfferer ? peerId : this.userId}/${isOfferer ? this.userId : peerId}`;
     const signalRef = ref(db, signalPath);
     const pendingCandidates: RTCIceCandidateInit[] = [];
 
@@ -127,6 +151,8 @@ export class VoiceManager {
     });
     const audio = new Audio();
     audio.autoplay = true;
+    audio.controls = false;
+    audio.muted = false;
     audio.volume = this.volume;
     audio.style.display = 'none';
     document.body.appendChild(audio);
@@ -135,12 +161,28 @@ export class VoiceManager {
 
     this.localStream?.getTracks().forEach(track => pc.addTrack(track, this.localStream!));
 
-    pc.ontrack = event => {
-      const stream = event.streams[0];
-      if (!stream) return;
+    pc.ontrack = async event => {
+      const stream = event.streams?.[0] || new MediaStream([event.track]);
       audio.srcObject = stream;
+
+      // Route remote audio through the already user-activated AudioContext.
+      // This avoids browser autoplay blocking on the dynamically-created
+      // <audio> element, while retaining the element as a fallback.
+      const ctx = await this.ensureAudioContext();
+      if (ctx && !entry.source) {
+        try {
+          entry.source = ctx.createMediaStreamSource(stream);
+          entry.gain = ctx.createGain();
+          entry.gain.gain.value = this.volume;
+          entry.source.connect(entry.gain).connect(ctx.destination);
+        } catch (err) {
+          console.warn('Voice: WebAudio routing failed; using HTMLAudio fallback', err);
+        }
+      }
+
       audio.play().catch(() => {
-        const resume = () => {
+        const resume = async () => {
+          try { await this.ensureAudioContext(); } catch {}
           audio.play().catch(() => {});
           document.removeEventListener('pointerdown', resume);
           document.removeEventListener('touchstart', resume);
@@ -152,18 +194,18 @@ export class VoiceManager {
 
     pc.onicecandidate = event => {
       if (!event.candidate || !this.userId) return;
-      push(child(signalRef, `candidates/${this.userId}`), event.candidate.toJSON()).catch(() => {});
+      push(child(signalRef, `candidates/${this.userId}`), event.candidate.toJSON()).catch(err => console.warn('Voice: ICE publish failed', err));
     };
 
     const applyPendingCandidates = async () => {
       if (!pc.remoteDescription || pendingCandidates.length === 0) return;
       const pending = pendingCandidates.splice(0);
       for (const candidate of pending) {
-        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => console.warn('Voice: queued ICE rejected', err));
       }
     };
 
-    const signalListener = onValue(signalRef, async snap => {
+    const signalUnsub = onValue(signalRef, async snap => {
       const signal = snap.val() || {};
       try {
         if (!isOfferer && signal.offer && !pc.currentRemoteDescription) {
@@ -182,18 +224,30 @@ export class VoiceManager {
         if (isOfferer) this.scheduleRetry(peerId);
       }
     });
-    entry.unsubscribers.push(() => off(signalRef, 'value', signalListener));
+    entry.unsubscribers.push(signalUnsub);
 
     const remoteCandidatesRef = child(signalRef, `candidates/${peerId}`);
-    const candidateListener = onChildAdded(remoteCandidatesRef, snap => {
+    const candidateUnsub = onChildAdded(remoteCandidatesRef, snap => {
       const candidate = snap.val() as RTCIceCandidateInit | null;
       if (!candidate) return;
-      if (pc.remoteDescription) pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
-      else pendingCandidates.push(candidate);
+      if (pc.remoteDescription) {
+        pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => console.warn('Voice: ICE rejected', err));
+      } else {
+        pendingCandidates.push(candidate);
+      }
     });
-    entry.unsubscribers.push(() => off(remoteCandidatesRef, 'child_added', candidateListener));
+    entry.unsubscribers.push(candidateUnsub);
+
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') {
+        console.warn('Voice: ICE connection failed', peerId);
+        this.closePeer(peerId);
+        if (isOfferer) this.scheduleRetry(peerId);
+      }
+    };
 
     pc.onconnectionstatechange = () => {
+      console.log('Voice: peer connection', peerId, pc.connectionState);
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         this.closePeer(peerId);
         if (isOfferer) this.scheduleRetry(peerId);
@@ -205,6 +259,14 @@ export class VoiceManager {
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
       await update(signalRef, { offer: { type: offer.type, sdp: offer.sdp }, answer: null, updatedAt: serverTimestamp() });
+    } else if (remoteOffer && !pc.currentRemoteDescription) {
+      // onChildAdded already supplies the offer; this explicit path also makes
+      // the callee deterministic when the listener fires during peer creation.
+      await pc.setRemoteDescription(new RTCSessionDescription(remoteOffer));
+      await applyPendingCandidates();
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await update(signalRef, { answer: { type: answer.type, sdp: answer.sdp }, updatedAt: serverTimestamp() });
     }
   }
 
@@ -212,7 +274,7 @@ export class VoiceManager {
     if (!this.userId || !this.roomId || this.retryTimers.has(peerId)) return;
     const timer = setTimeout(() => {
       this.retryTimers.delete(peerId);
-      if (!this.peers.has(peerId)) this.setupPeer(peerId, this.userId! < peerId).catch(() => {});
+      if (!this.peers.has(peerId)) this.setupPeer(peerId, this.userId! < peerId).catch(err => console.warn('Voice: retry failed', err));
     }, 1500);
     this.retryTimers.set(peerId, timer);
   }
@@ -220,7 +282,9 @@ export class VoiceManager {
   private closePeer(peerId: string) {
     const entry = this.peers.get(peerId);
     if (!entry) return;
-    entry.unsubscribers.forEach(unsubscribe => unsubscribe());
+    entry.unsubscribers.forEach(unsubscribe => { try { unsubscribe(); } catch {} });
+    try { entry.source?.disconnect(); } catch {}
+    try { entry.gain?.disconnect(); } catch {}
     entry.pc.close();
     entry.audio.pause();
     entry.audio.srcObject = null;
@@ -239,13 +303,18 @@ export class VoiceManager {
     this.retryTimers.forEach(timer => clearTimeout(timer));
     this.retryTimers.clear();
     [...this.peers.keys()].forEach(peerId => this.closePeer(peerId));
-    this.unsubscribers.forEach(unsubscribe => unsubscribe());
+    this.unsubscribers.forEach(unsubscribe => { try { unsubscribe(); } catch {} });
     this.unsubscribers = [];
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => track.stop());
       this.localStream = null;
     }
+    if (this.audioContext) {
+      this.audioContext.close().catch(() => {});
+      this.audioContext = null;
+    }
     this.roomId = null;
     this.userId = null;
+    this.isPrimed = false;
   }
 }
