@@ -1,23 +1,15 @@
 name: Deploy to Firebase
 
-on:
+"on":
   push:
     branches:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: read
-
-concurrency:
-  group: firebase-production
-  cancel-in-progress: false
-
 jobs:
   deploy:
     name: Build and deploy to Firebase
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -35,13 +27,13 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Install workspace dependencies
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build game client
         run: pnpm --filter @workspace/killer-pool run build
 
-      - name: Setup Firebase CLI
+      - name: Install Firebase CLI
         run: npm install --global firebase-tools
 
       - name: Authenticate to Google Cloud
@@ -51,26 +43,31 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Validate deployment configuration
+      - name: Validate Firebase credentials
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: |
-          test -n "$FIREBASE_PROJECT_ID" || { echo 'FIREBASE_PROJECT_ID secret is not configured'; exit 1; }
-          test -n "$GOOGLE_APPLICATION_CREDENTIALS" || { echo 'Google credentials were not created'; exit 1; }
-          test -s "$GOOGLE_APPLICATION_CREDENTIALS" || { echo 'Google credentials file is empty'; exit 1; }
+          if [ -z "$FIREBASE_PROJECT_ID" ]; then
+            echo "FIREBASE_PROJECT_ID secret is not configured"
+            exit 1
+          fi
+          if [ -z "$GOOGLE_APPLICATION_CREDENTIALS" ] || [ ! -s "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+            echo "Google service-account credentials were not created"
+            exit 1
+          fi
           firebase projects:list --non-interactive >/dev/null
 
-      - name: Deploy Firebase Hosting
+      - name: Deploy Hosting
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: firebase deploy --project "$FIREBASE_PROJECT_ID" --only hosting --non-interactive
 
-      - name: Deploy Firebase Functions
+      - name: Deploy Functions
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: firebase deploy --project "$FIREBASE_PROJECT_ID" --only functions --non-interactive
 
-      - name: Print production URL
+      - name: Show production URL
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: echo "Firebase Hosting: https://${FIREBASE_PROJECT_ID}.web.app"
