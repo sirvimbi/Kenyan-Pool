@@ -54,6 +54,10 @@ export default function App() {
   const unsubMatchmakingRef = useRef<(() => void) | null>(null);
   const hasReceivedStateRef = useRef(false);
 
+  // Prevent a stale roundEnd Firebase snapshot from resurrecting
+  // the previous result screen while the host is committing a rematch.
+  const rematchRestartingRef = useRef(false);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const profileBalanceRef = useRef<number>(STARTING_BALANCE);
   const lastHudSyncRef = useRef(0);
@@ -213,6 +217,8 @@ export default function App() {
     });
 
     eng.on('shot:fired', (data: any) => {
+      // data.spin may contain the final ball-in-hand position.
+      // Preserve it in the authoritative shot intent.
       sendMove(data.aimAngle, data.power, data.spin);
     });
 
@@ -283,6 +289,10 @@ export default function App() {
     }
 
     if (netGameState.phase === 'roundEnd') {
+      if (rematchRestartingRef.current) {
+        return;
+      }
+
       setScreen('roundEnd');
       if (!roundData) {
         const maxScore = Math.max(...netGameState.players.map(p => p.score));
@@ -315,22 +325,89 @@ export default function App() {
 
   // Handle Rematch Logic
   useEffect(() => {
-    if (screen === 'roundEnd' && netRematchVotes && hud && engine && isHost) {
-      const voteCount = Object.keys(netRematchVotes).length;
-      const playerCount = hud.players.length;
-
-      if (voteCount >= playerCount && playerCount > 0) {
-        console.log("Host: All players voted for rematch. Restarting...");
-        const previousScores: Record<string, number> = {};
-        hud.players.forEach(p => { if (p.uid) previousScores[p.uid] = p.score; });
-
-        resetRoom(hud.players, hud.stake, previousScores);
-        engine.startGame(hud.players, hud.stake, profileBalanceRef.current, previousScores, user?.uid);
-        setRoundData(null);
-        setScreen('game');
-      }
+    if (
+      screen !== 'roundEnd' ||
+      !netRematchVotes ||
+      !hud ||
+      !engine ||
+      !isHost
+    ) {
+      return;
     }
-  }, [netRematchVotes, screen, hud, engine, isHost, resetRoom, user?.uid]);
+
+    if (rematchRestartingRef.current) {
+      return;
+    }
+
+    // Use the actual players in the finished room, not the number
+    // of arbitrary keys in rematchVotes.
+    const players = netGameState?.players?.length
+      ? netGameState.players
+      : hud.players;
+
+    const playerUids = players
+      .map(p => p.uid)
+      .filter((uid): uid is string => !!uid);
+
+    const allPlayersVoted =
+      playerUids.length > 0 &&
+      playerUids.every(uid => netRematchVotes[uid] === true);
+
+    if (!allPlayersVoted) {
+      return;
+    }
+
+    console.log("Host: All actual players voted for rematch. Restarting...");
+
+    // Lock the restart before changing Firebase state. This prevents
+    // the old roundEnd snapshot from immediately restoring roundEnd UI.
+    rematchRestartingRef.current = true;
+
+    const previousScores: Record<string, number> = {};
+    players.forEach(p => {
+      if (p.uid) {
+        previousScores[p.uid] = p.score;
+      }
+    });
+
+    resetRoom(players, hud.stake, previousScores);
+
+    // Re-use the same two matched players. This is deliberately NOT
+    // matchmaking again and therefore preserves the existing PvP pair.
+    engine.startGame(
+      players,
+      hud.stake,
+      profileBalanceRef.current,
+      previousScores,
+      user?.uid
+    );
+
+    // Immediately publish the fresh authoritative aiming state.
+    // Do not wait for the normal 400ms host heartbeat.
+    const freshHud = engine.getHUDState();
+    updateAuthoritativeState(freshHud, engine.balls);
+
+    setHud(freshHud);
+    setRoundData(null);
+    setScreen('game');
+  }, [
+    netRematchVotes,
+    netGameState,
+    screen,
+    hud,
+    engine,
+    isHost,
+    resetRoom,
+    updateAuthoritativeState,
+    user?.uid
+  ]);
+
+  // Release the restart lock once Firebase has advanced beyond roundEnd.
+  useEffect(() => {
+    if (netGameState?.phase && netGameState.phase !== 'roundEnd') {
+      rematchRestartingRef.current = false;
+    }
+  }, [netGameState?.phase]);
 
   // Guest: Watch for Host resetting the game phase
   useEffect(() => {
@@ -467,7 +544,9 @@ export default function App() {
       if (move && move.createdAt > (now - 10000)) {
         const hudState = engine.getHUDState();
         const curPlayer = hudState.players[hudState.currentPlayerIndex];
-        if (curPlayer && curPlayer.uid !== user?.uid) { engine.remoteShot(move.aimAngle, move.power, move.spin); }
+        if (curPlayer && curPlayer.uid !== user?.uid) {
+          engine.remoteShot(move.aimAngle, move.power, move.spin);
+        }
       }
     });
     return () => offRtdb(intentsRef, 'child_added', unsub);

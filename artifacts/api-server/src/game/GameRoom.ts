@@ -176,6 +176,7 @@ export class GameRoom {
       currentPlayerIndex: this.currentPlayerIndex,
       targetBall: this.targetBall,
       timeLeft: Math.ceil(this.timeLeft),
+      aimAngle: 0,
       power: 0,
       phase: this.phase,
       prizePool: this.prizePool,
