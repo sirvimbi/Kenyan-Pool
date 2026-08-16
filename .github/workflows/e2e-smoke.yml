@@ -41,23 +41,23 @@ jobs:
 
       - name: Start preview server
         run: |
-          pnpm --filter @workspace/killer-pool run serve > /tmp/killer-pool-vite.log 2>&1 &
+          PORT=5173 pnpm --filter @workspace/killer-pool run serve > /tmp/killer-pool-vite.log 2>&1 &
           echo $! > /tmp/killer-pool-vite.pid
           for i in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then exit 0; fi
+            if curl --fail --silent http://127.0.0.1:5173/ > /dev/null; then exit 0; fi
             sleep 1
           done
           cat /tmp/killer-pool-vite.log
           exit 1
 
       - name: Desktop browser smoke
-        run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='1440,900' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/desktop.png
+        run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='1440,900' --wait-for-timeout=2000 http://127.0.0.1:5173/ /tmp/desktop.png
 
       - name: Mobile portrait smoke
-        run: npx --yes playwright@latest screenshot --browser=chromium --device='iPhone 13' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/mobile-portrait.png
+        run: npx --yes playwright@latest screenshot --browser=chromium --device='iPhone 13' --wait-for-timeout=2000 http://127.0.0.1:5173/ /tmp/mobile-portrait.png
 
       - name: Mobile landscape smoke
-        run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='844,390' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/mobile-landscape.png
+        run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='844,390' --wait-for-timeout=2000 http://127.0.0.1:5173/ /tmp/mobile-landscape.png
 
       - name: Upload browser screenshots
         if: always()
