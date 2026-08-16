@@ -12,7 +12,7 @@ jobs:
   browser-smoke:
     name: Browser smoke - desktop and mobile
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -36,8 +36,8 @@ jobs:
       - name: Build game client
         run: pnpm --filter @workspace/killer-pool run build
 
-      - name: Install Chromium
-        run: npx --yes playwright@latest install --with-deps chromium
+      - name: Install Chromium and WebKit
+        run: npx --yes playwright@latest install --with-deps chromium webkit
 
       - name: Start preview server
         run: |
@@ -54,7 +54,7 @@ jobs:
         run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='1440,900' --wait-for-timeout=2000 http://127.0.0.1:5173/ /tmp/desktop.png
 
       - name: Mobile portrait smoke
-        run: npx --yes playwright@latest screenshot --browser=chromium --device='iPhone 13' --wait-for-timeout=2000 http://127.0.0.1:5173/ /tmp/mobile-portrait.png
+        run: npx --yes playwright@latest screenshot --browser=webkit --device='iPhone 13' --wait-for-timeout=2000 http://127.0.0.1:5173/ /tmp/mobile-portrait.png
 
       - name: Mobile landscape smoke
         run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='844,390' --wait-for-timeout=2000 http://127.0.0.1:5173/ /tmp/mobile-landscape.png
