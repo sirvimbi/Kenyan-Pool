@@ -1,0 +1,46 @@
+name: CI - Typecheck and Build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, 'fix/**', 'feature/**', 'ci/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.4
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Typecheck game client
+        run: pnpm --filter @workspace/killer-pool run typecheck
+
+      - name: Build game client
+        run: pnpm --filter @workspace/killer-pool run build
