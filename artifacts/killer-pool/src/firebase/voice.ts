@@ -1,4 +1,4 @@
-import { ref, set, update, onValue, off, push, child, onChildAdded, serverTimestamp, remove } from "firebase/database";
+import { ref, set, update, onValue, off, push, child, onChildAdded, serverTimestamp, remove, onDisconnect } from "firebase/database";
 import { getRtdb, isFirebaseConfigured } from "./config";
 
 const PEERS_PATH = "voice_peers";
@@ -52,7 +52,7 @@ export class VoiceManager {
     this.roomId = roomId; this.userId = userId;
     const db = getRtdb();
     const presenceRef = ref(db, `${PEERS_PATH}/${roomId}/presence/${userId}`);
-    await presenceRef.onDisconnect().update({ online: false, leftAt: serverTimestamp() }).catch(() => {});
+    await onDisconnect(presenceRef).update({ online: false, leftAt: serverTimestamp() }).catch(() => {});
     await set(presenceRef, { online: true, joinedAt: serverTimestamp() });
 
     const allPresenceRef = ref(db, `${PEERS_PATH}/${roomId}/presence`);
@@ -81,7 +81,7 @@ export class VoiceManager {
     };
     const pc = peerEntry.pc; const audio = peerEntry.audio;
     const pendingCandidates: RTCIceCandidateInit[] = [];
-    audio.autoplay = true; audio.playsInline = true; audio.volume = this.volume; audio.style.display = "none";
+    audio.autoplay = true; audio.volume = this.volume; audio.style.display = "none";
     document.body.appendChild(audio);
     this.peers.set(peerId, peerEntry);
     this.localStream?.getTracks().forEach(track => pc.addTrack(track, this.localStream!));
