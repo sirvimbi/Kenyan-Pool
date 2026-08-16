@@ -1,5 +1,5 @@
 import {
-  ref, set, update, onValue, push, child, onChildAdded,
+  ref, set, update, onValue, push, child,
   serverTimestamp, remove, onDisconnect
 } from 'firebase/database';
 import { getRtdb, isFirebaseConfigured } from './config';
@@ -46,6 +46,7 @@ export class VoiceManager {
       if (!AudioContextCtor) return null;
       if (!this.audioContext) this.audioContext = new AudioContextCtor();
       const ctx = this.audioContext;
+      if (!ctx) return null;
       if (ctx.state === 'suspended') await ctx.resume();
       return ctx;
     } catch (err) {
@@ -130,11 +131,12 @@ export class VoiceManager {
     this.unsubscribers.push(presenceUnsub);
 
     const incomingSignalsRef = ref(db, `${PEERS_PATH}/${roomId}/signals/${userId}`);
-    const incomingUnsub = onChildAdded(incomingSignalsRef, snap => {
-      const peerId = snap.key;
-      const signal = snap.val();
-      if (!peerId || !signal?.offer || this.peers.has(peerId)) return;
-      this.setupPeer(peerId, false, signal.offer).catch(err => console.warn('Voice: answer setup failed', err));
+    const incomingUnsub = onValue(incomingSignalsRef, snap => {
+      const data = snap.val() || {};
+      Object.entries(data).forEach(([peerId, signal]: [string, any]) => {
+        if (!peerId || !signal?.offer || this.peers.has(peerId)) return;
+        this.setupPeer(peerId, false, signal.offer).catch(err => console.warn('Voice: answer setup failed', err));
+      });
     });
     this.unsubscribers.push(incomingUnsub);
   }
@@ -146,12 +148,7 @@ export class VoiceManager {
     const signalRef = ref(db, signalPath);
     const pendingCandidates: RTCIceCandidateInit[] = [];
 
-    const pc = new RTCPeerConnection({
-      iceServers: iceServers(),
-      bundlePolicy: 'max-bundle',
-      rtcpMuxPolicy: 'require',
-      iceCandidatePoolSize: 4,
-    });
+    const pc = new RTCPeerConnection({ iceServers: iceServers(), bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require', iceCandidatePoolSize: 4 });
     const audio = new Audio();
     audio.autoplay = true;
     audio.controls = false;
@@ -172,13 +169,12 @@ export class VoiceManager {
         audio.play().catch(() => {});
         return;
       }
-      const audioContext = ctx;
       if (!entry.source) {
         try {
-          entry.source = audioContext.createMediaStreamSource(stream);
-          entry.gain = audioContext.createGain();
+          entry.source = ctx.createMediaStreamSource(stream);
+          entry.gain = ctx.createGain();
           entry.gain.gain.value = this.volume;
-          entry.source.connect(entry.gain).connect(audioContext.destination);
+          entry.source.connect(entry.gain).connect(ctx.destination);
         } catch (err) {
           console.warn('Voice: WebAudio routing failed; using HTMLAudio fallback', err);
         }
@@ -236,14 +232,17 @@ export class VoiceManager {
     entry.unsubscribers.push(signalUnsub);
 
     const remoteCandidatesRef = child(signalRef, `candidates/${peerId}`);
-    const candidateUnsub = onChildAdded(remoteCandidatesRef, snap => {
-      const candidate = snap.val() as RTCIceCandidateInit | null;
-      if (!candidate) return;
-      if (pc.remoteDescription) {
-        pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => console.warn('Voice: ICE rejected', err));
-      } else {
-        pendingCandidates.push(candidate);
-      }
+    const candidateUnsub = onValue(remoteCandidatesRef, snap => {
+      const data = snap.val() || {};
+      Object.values(data).forEach(candidate => {
+        if (!candidate) return;
+        const ice = candidate as RTCIceCandidateInit;
+        if (pc.remoteDescription) {
+          pc.addIceCandidate(new RTCIceCandidate(ice)).catch(err => console.warn('Voice: ICE rejected', err));
+        } else {
+          pendingCandidates.push(ice);
+        }
+      });
     });
     entry.unsubscribers.push(candidateUnsub);
 
