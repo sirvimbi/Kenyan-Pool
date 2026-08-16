@@ -8,8 +8,6 @@ import { GameEngine } from './engine';
  */
 const proto = GameEngine.prototype as any;
 
-// 1) Every fresh rack starts with cue-ball-in-hand. The player can place the
-// cue ball anywhere inside the legal baulk box before the first shot.
 const originalStartGame = proto.startGame;
 if (!proto.__kenyanPoolStartGamePatched) {
   proto.startGame = function (...args: any[]) {
@@ -38,8 +36,6 @@ if (!proto.__kenyanPoolStartGamePatched) {
   proto.__kenyanPoolStartGamePatched = true;
 }
 
-// 2) Normalize English and make the response less exaggerated on devices
-// where touch input can report slightly different pointer deltas.
 const originalSetSpin = proto.setSpin;
 if (!proto.__kenyanPoolSpinPatched) {
   proto.setSpin = function (x: number, z: number) {
@@ -51,9 +47,6 @@ if (!proto.__kenyanPoolSpinPatched) {
       sx = (sx / mag) * max;
       sz = (sz / mag) * max;
     }
-
-    // Side English is deliberately gentler because the engine also models
-    // squirt. This keeps the cue-ball launch close to the player's visible aim.
     sx *= 0.55;
     sz *= 0.80;
     originalSetSpin.call(this, sx, sz);
@@ -61,26 +54,17 @@ if (!proto.__kenyanPoolSpinPatched) {
   proto.__kenyanPoolSpinPatched = true;
 }
 
-// 3) Keep shot direction faithful to the displayed aim. The old implementation
-// applied a relatively large instantaneous squirt correction, which could make
-// a shot visibly leave the cue in a direction the player did not select.
 const originalExecuteShot = proto.executeShot;
 if (!proto.__kenyanPoolExecutePatched) {
   proto.executeShot = function (isRemote = false) {
     if (this.currentSpin) {
-      this.currentSpin = {
-        x: this.currentSpin.x * 0.45,
-        z: this.currentSpin.z
-      };
+      this.currentSpin = { x: this.currentSpin.x * 0.45, z: this.currentSpin.z };
     }
     return originalExecuteShot.call(this, isRemote);
   };
   proto.__kenyanPoolExecutePatched = true;
 }
 
-// 4) A remote ball-in-hand placement is authoritative until the shot begins.
-// This prevents a normal rack snapshot from moving the cue ball back to its
-// old position between drag/drop and fire.
 const originalSyncAim = proto.syncAimFromServer;
 if (!proto.__kenyanPoolAimSyncPatched) {
   proto.syncAimFromServer = function (aim: any) {
@@ -114,8 +98,7 @@ if (!proto.__kenyanPoolBallSyncPatched) {
       const current = this.players?.[this.currentPlayerIndex];
       const cue = this.balls?.find((b: any) => b.number === 0);
       if (current && cue && this.ballInHand) {
-        const filtered = serverBalls.filter((b: any) => b.number !== 0);
-        return originalSyncBalls.call(this, filtered);
+        return originalSyncBalls.call(this, serverBalls.filter((b: any) => b.number !== 0));
       }
     }
     return originalSyncBalls.call(this, serverBalls);
@@ -123,8 +106,47 @@ if (!proto.__kenyanPoolBallSyncPatched) {
   proto.__kenyanPoolBallSyncPatched = true;
 }
 
-// 5) Landscape-safe mobile power meter. The component keeps its existing DOM
-// and behavior; this only changes its placement when the viewport rotates.
+// Ball rolling is based on physical distance travelled rather than velocity per
+// animation frame. The old implementation therefore looked roughly twice as
+// fast on 120-Hz devices as on 60-Hz devices.
+if (!proto.__kenyanPoolVisualPhysicsPatched) {
+  proto.syncBallMeshes = function () {
+    const now = performance.now();
+    const previous = this.__kenyanPoolLastBallVisualTime ?? now;
+    const dt = Math.min(0.05, Math.max(1 / 240, (now - previous) / 1000));
+    this.__kenyanPoolLastBallVisualTime = now;
+
+    for (const b of this.balls || []) {
+      const mesh = this.ballMeshes?.get?.(b.number);
+      if (!mesh) continue;
+      if (b.isPotted) {
+        mesh.visible = false;
+        continue;
+      }
+
+      mesh.visible = true;
+      mesh.position.set(b.pos.x, 2.86, b.pos.z);
+
+      const speed = Math.hypot(b.vel.x, b.vel.z);
+      if (speed > 0.01) {
+        const rollAngle = (speed * dt) / 2.86;
+        const axis = mesh.position.clone().set(b.vel.z, 0, -b.vel.x);
+        if (axis.lengthSq() > 0) {
+          axis.normalize();
+          mesh.rotateOnWorldAxis(axis, rollAngle);
+        }
+      }
+
+      // Side English produces a small yaw component which decays in physics.
+      const sideSpin = b.spin?.x || 0;
+      if (Math.abs(sideSpin) > 0.005) {
+        mesh.rotation.y += sideSpin * dt * 0.8;
+      }
+    }
+  };
+  proto.__kenyanPoolVisualPhysicsPatched = true;
+}
+
 if (typeof document !== 'undefined' && !document.getElementById('kenyan-pool-runtime-style')) {
   const style = document.createElement('style');
   style.id = 'kenyan-pool-runtime-style';
@@ -142,10 +164,7 @@ if (typeof document !== 'undefined' && !document.getElementById('kenyan-pool-run
         width: 58px !important;
         height: min(72vh, 360px) !important;
       }
-      .mobile-power-bar {
-        height: 100% !important;
-        width: 28px !important;
-      }
+      .mobile-power-bar { height: 100% !important; width: 28px !important; }
       .mobile-power-label {
         writing-mode: vertical-rl !important;
         transform: rotate(180deg) !important;
@@ -153,17 +172,12 @@ if (typeof document !== 'undefined' && !document.getElementById('kenyan-pool-run
       }
     }
     @media (orientation: portrait) and (max-width: 900px) {
-      .mobile-power-wrap {
-        position: fixed !important;
-        z-index: 2500 !important;
-      }
+      .mobile-power-wrap { position: fixed !important; z-index: 2500 !important; }
     }
   `;
   document.head.appendChild(style);
 }
 
-// Re-render layout after rotation even on browsers that do not emit a normal
-// resize event immediately.
 if (typeof window !== 'undefined') {
   const notifyViewport = () => window.dispatchEvent(new Event('resize'));
   window.addEventListener('orientationchange', notifyViewport, { passive: true });
