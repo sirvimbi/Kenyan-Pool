@@ -27,7 +27,11 @@ interface NetworkContextType {
   joinQueue: (stake: number, name: string, uid: string, priorityUid?: string | null) => Promise<() => void>;
   playVsAI: (stake: number, name: string, uid: string, previousScores?: Record<string, number>) => void;
   updateAuthoritativeState: (state: HUDState, balls: BallState[]) => void;
-  sendMove: (aimAngle: number, power: number, spin: Vec2) => void;
+  sendMove: (
+    aimAngle: number,
+    power: number,
+    spin: Vec2 & { pos?: Vec2 }
+  ) => void;
   sendAimState: (aimAngle: number, power: number, spin: Vec2, pos?: Vec2) => void;
   voteRematch: (uid: string) => void;
   resetRoom: (players: any[], stake: number, previousScores?: Record<string, number>) => void;
@@ -271,10 +275,16 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     update(ref(db, `rooms/${roomId}`), updates);
   }, [roomId]);
 
-  const sendMove = useCallback((aimAngle: number, power: number, spin: Vec2) => {
+  const sendMove = useCallback((
+    aimAngle: number,
+    power: number,
+    spin: Vec2 & { pos?: Vec2 }
+  ) => {
     if (!roomId) return;
+
     const db = getRtdb();
     const intentRef = push(ref(db, `rooms/${roomId}/intents`));
+
     set(intentRef, {
       aimAngle,
       power,
@@ -307,12 +317,17 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     if (!roomId || !isHost) return;
     const db = getRtdb();
 
-    // Clear old data and reset state
-    remove(ref(db, `rooms/${roomId}/intents`));
-    remove(ref(db, `rooms/${roomId}/activeAim`));
-    remove(ref(db, `rooms/${roomId}/rematchVotes`));
-
-    // Engine will call updateAuthoritativeState soon after Host calls startGame
+    // Atomically clear transient state. The authoritative new game
+    // state is written immediately by App after engine.startGame().
+    update(ref(db, `rooms/${roomId}`), {
+      intents: null,
+      activeAim: null,
+      rematchVotes: null,
+      previousScores: previousScores || null,
+      stake
+    }).catch(err => {
+      console.error("Network: Failed to reset transient room state", err);
+    });
   }, [roomId, isHost]);
 
   const leaveRoom = useCallback(() => {

@@ -1298,6 +1298,11 @@ export class GameEngine {
     if (this.isDragging) {
       const p = this.clampToBox(tablePos.x, tablePos.z);
       cueBall.pos = { x: p.x, z: p.z };
+
+      // Ball-in-hand placement is local input. Emit HUD so the
+      // network layer can publish the current cue-ball position.
+      this.emitHUD();
+
       this.updateCursor(true);
       return;
     }
@@ -1343,6 +1348,9 @@ export class GameEngine {
     if (this.isDragging) {
       this.isDragging = false;
       this.updateCursor(false);
+
+      // Publish the final dropped position immediately.
+      this.emitHUD();
       return;
     }
     if (this.phase !== 'powering') return;
@@ -1459,6 +1467,9 @@ export class GameEngine {
     if (this.isDragging) {
       const p = this.clampToBox(tablePos.x, tablePos.z);
       cueBall.pos = { x: p.x, z: p.z };
+
+      // Keep mobile ball-in-hand position synchronized while dragging.
+      this.emitHUD();
     } else if (this.isTouchAiming) {
       const deltaX = pos.x - this.lastTouchPos.x;
       this.aimAngle -= deltaX * 3;
@@ -1469,6 +1480,9 @@ export class GameEngine {
   private onTouchEnd = () => {
     if (this.isDragging) {
       this.isDragging = false;
+
+      // Commit the final mobile drop position.
+      this.emitHUD();
       return;
     }
     this.isTouchAiming = false;
@@ -1597,6 +1611,19 @@ export class GameEngine {
     serverBalls.forEach(sb => {
       const b = this.balls.find(ball => ball.number === sb.number);
       if (b) {
+        // While the local player has ball-in-hand, the local cue-ball
+        // position is authoritative. The host may still be broadcasting
+        // the previous rack position; never let that stale snapshot
+        // overwrite a position the player is currently placing.
+        if (
+          b.number === 0 &&
+          this.ballInHand &&
+          this.isLocalTurn &&
+          this.phase === 'aiming'
+        ) {
+          return;
+        }
+
         // Tighter threshold (1.0cm) during simulation ensures Guests follow Host pots accurately.
         const threshold = (this.phase === 'simulating') ? 1.0 : 0.05;
         const dist = Math.hypot(b.pos.x - sb.pos.x, b.pos.z - sb.pos.z);
@@ -1633,11 +1660,40 @@ export class GameEngine {
     }
   }
 
-  public remoteShot(aimAngle: number, power: number, spin: Vec2) {
+  public remoteShot(
+    aimAngle: number,
+    power: number,
+    spin: Vec2 & { pos?: Vec2 }
+  ) {
     this.phase = 'aiming';
     this.aimAngle = aimAngle;
     this.power = power;
-    this.currentSpin = { ...spin };
+    this.currentSpin = {
+      x: spin.x,
+      z: spin.z
+    };
+
+    // The guest's final ball-in-hand position is part of the
+    // authoritative shot command. Apply it BEFORE physics starts.
+    const cueBall = this.balls.find(b => b.number === 0);
+
+    if (cueBall && spin.pos) {
+      const placed = this.clampToBox(spin.pos.x, spin.pos.z);
+
+      cueBall.pos = {
+        x: placed.x,
+        z: placed.z
+      };
+      cueBall.vel = { x: 0, z: 0 };
+      cueBall.isPotted = false;
+
+      const mesh = this.ballMeshes.get(0);
+      if (mesh) {
+        mesh.visible = true;
+        mesh.position.set(placed.x, BALL_R, placed.z);
+      }
+    }
+
     this.executeShot(true);
   }
 
@@ -1665,7 +1721,13 @@ export class GameEngine {
       this.emit('shot:fired', {
         aimAngle: this.aimAngle,
         power: this.power,
-        spin: { ...this.currentSpin }
+        spin: {
+          ...this.currentSpin,
+          pos: {
+            x: cueBall.pos.x,
+            z: cueBall.pos.z
+          }
+        }
       });
     }
     for (const b of this.balls) { b.firstContactGiven = false; }
