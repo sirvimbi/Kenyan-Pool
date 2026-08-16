@@ -8,8 +8,6 @@ import { GameEngine } from './engine';
  */
 const proto = GameEngine.prototype as any;
 
-// 1) Every fresh rack starts with cue-ball-in-hand. The player can place the
-// cue ball anywhere inside the legal baulk box before the first shot.
 const originalStartGame = proto.startGame;
 if (!proto.__kenyanPoolStartGamePatched) {
   proto.startGame = function (...args: any[]) {
@@ -38,8 +36,6 @@ if (!proto.__kenyanPoolStartGamePatched) {
   proto.__kenyanPoolStartGamePatched = true;
 }
 
-// 2) Normalize English and make the response less exaggerated on devices
-// where touch input can report slightly different pointer deltas.
 const originalSetSpin = proto.setSpin;
 if (!proto.__kenyanPoolSpinPatched) {
   proto.setSpin = function (x: number, z: number) {
@@ -58,22 +54,17 @@ if (!proto.__kenyanPoolSpinPatched) {
   proto.__kenyanPoolSpinPatched = true;
 }
 
-// 3) Keep shot direction faithful to the displayed aim.
 const originalExecuteShot = proto.executeShot;
 if (!proto.__kenyanPoolExecutePatched) {
   proto.executeShot = function (isRemote = false) {
     if (this.currentSpin) {
-      this.currentSpin = {
-        x: this.currentSpin.x * 0.45,
-        z: this.currentSpin.z
-      };
+      this.currentSpin = { x: this.currentSpin.x * 0.45, z: this.currentSpin.z };
     }
     return originalExecuteShot.call(this, isRemote);
   };
   proto.__kenyanPoolExecutePatched = true;
 }
 
-// 4) A remote ball-in-hand placement is authoritative until the shot begins.
 const originalSyncAim = proto.syncAimFromServer;
 if (!proto.__kenyanPoolAimSyncPatched) {
   proto.syncAimFromServer = function (aim: any) {
@@ -107,8 +98,7 @@ if (!proto.__kenyanPoolBallSyncPatched) {
       const current = this.players?.[this.currentPlayerIndex];
       const cue = this.balls?.find((b: any) => b.number === 0);
       if (current && cue && this.ballInHand) {
-        const filtered = serverBalls.filter((b: any) => b.number !== 0);
-        return originalSyncBalls.call(this, filtered);
+        return originalSyncBalls.call(this, serverBalls.filter((b: any) => b.number !== 0));
       }
     }
     return originalSyncBalls.call(this, serverBalls);
@@ -116,11 +106,9 @@ if (!proto.__kenyanPoolBallSyncPatched) {
   proto.__kenyanPoolBallSyncPatched = true;
 }
 
-// 5) Ball rolling is visualized from physical distance travelled, not from
-// velocity per animation frame. The previous implementation rotated by
-// `speed * constant` on every requestAnimationFrame, so a 120 Hz device showed
-// roughly twice the visible rolling/spin rate of a 60 Hz device.
-const originalSyncBallMeshes = proto.syncBallMeshes;
+// Ball rolling is based on physical distance travelled rather than velocity per
+// animation frame. The old implementation therefore looked roughly twice as
+// fast on 120-Hz devices as on 60-Hz devices.
 if (!proto.__kenyanPoolVisualPhysicsPatched) {
   proto.syncBallMeshes = function () {
     const now = performance.now();
@@ -128,10 +116,8 @@ if (!proto.__kenyanPoolVisualPhysicsPatched) {
     const dt = Math.min(0.05, Math.max(1 / 240, (now - previous) / 1000));
     this.__kenyanPoolLastBallVisualTime = now;
 
-    const balls = this.balls || [];
-    const meshes = this.ballMeshes;
-    for (const b of balls) {
-      const mesh = meshes?.get?.(b.number);
+    for (const b of this.balls || []) {
+      const mesh = this.ballMeshes?.get?.(b.number);
       if (!mesh) continue;
       if (b.isPotted) {
         mesh.visible = false;
@@ -143,37 +129,24 @@ if (!proto.__kenyanPoolVisualPhysicsPatched) {
 
       const speed = Math.hypot(b.vel.x, b.vel.z);
       if (speed > 0.01) {
-        // Rolling angle = distance / radius. This is physically meaningful and
-        // therefore independent of display refresh rate.
         const rollAngle = (speed * dt) / 2.86;
-        const axis = new (globalThis as any).THREE?.Vector3?.(b.vel.z, 0, -b.vel.x);
-        if (axis && axis.lengthSq() > 0) {
+        const axis = mesh.position.clone().set(b.vel.z, 0, -b.vel.x);
+        if (axis.lengthSq() > 0) {
           axis.normalize();
           mesh.rotateOnWorldAxis(axis, rollAngle);
-        } else {
-          // Three.js is imported by the engine; use the mesh's existing API
-          // fallback if a global THREE namespace is unavailable.
-          const axisFallback = mesh.position.clone().set(b.vel.z, 0, -b.vel.x).normalize();
-          mesh.rotateOnWorldAxis(axisFallback, rollAngle);
         }
       }
 
-      // Side English produces a slow yaw component. It decays in the physics
-      // engine, so it cannot continue spinning forever after the shot.
+      // Side English produces a small yaw component which decays in physics.
       const sideSpin = b.spin?.x || 0;
       if (Math.abs(sideSpin) > 0.005) {
         mesh.rotation.y += sideSpin * dt * 0.8;
       }
     }
-
-    // Keep the original method available for future engine upgrades, but do not
-    // call it because its frame-rate-dependent rotation would be double-applied.
-    void originalSyncBallMeshes;
   };
   proto.__kenyanPoolVisualPhysicsPatched = true;
 }
 
-// 6) Landscape-safe mobile power meter.
 if (typeof document !== 'undefined' && !document.getElementById('kenyan-pool-runtime-style')) {
   const style = document.createElement('style');
   style.id = 'kenyan-pool-runtime-style';
