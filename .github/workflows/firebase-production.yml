@@ -39,6 +39,17 @@ jobs:
       - name: Install Firebase CLI
         run: npm install --global firebase-tools
 
+      - name: Check Firebase service-account secret availability
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -n "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "FIREBASE_SERVICE_ACCOUNT is configured: yes"
+          else
+            echo "FIREBASE_SERVICE_ACCOUNT is configured: no"
+            exit 1
+          fi
+
       - name: Authenticate Google Cloud
         uses: google-github-actions/auth@v2
         with:
