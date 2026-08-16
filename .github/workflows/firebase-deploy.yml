@@ -1,6 +1,6 @@
 name: Deploy to Firebase
 
-"on":
+on:
   push:
     branches:
       - main
@@ -43,29 +43,8 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Validate Firebase credentials
-        env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: |
-          if [ -z "$FIREBASE_PROJECT_ID" ]; then
-            echo "FIREBASE_PROJECT_ID secret is not configured"
-            exit 1
-          fi
-          if [ -z "$GOOGLE_APPLICATION_CREDENTIALS" ] || [ ! -s "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
-            echo "Google service-account credentials were not created"
-            exit 1
-          fi
-          firebase projects:list --non-interactive >/dev/null
-
       - name: Deploy Hosting
-  run: firebase deploy --project kenyan-pool --only hosting --non-interactive
-
-      - name: Deploy Functions
-        env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: firebase deploy --project "$FIREBASE_PROJECT_ID" --only functions --non-interactive
+        run: firebase deploy --project kenyan-pool --only hosting --non-interactive
 
       - name: Show production URL
-        env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: echo "Firebase Hosting: https://${FIREBASE_PROJECT_ID}.web.app"
+        run: echo "Firebase Hosting: https://kenyan-pool.web.app"
