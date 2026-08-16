@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { GameEngine } from './engine';
 
 /**
@@ -46,7 +47,6 @@ if (!proto.__kenyanPoolSpinPatched) {
       sx = (sx / mag) * max;
       sz = (sz / mag) * max;
     }
-    // Keep English controlled; it must never dominate the displayed aim.
     sx *= 0.55;
     sz *= 0.80;
     originalSetSpin.call(this, sx, sz);
@@ -58,11 +58,6 @@ const originalExecuteShot = proto.executeShot;
 if (!proto.__kenyanPoolExecutePatched) {
   proto.executeShot = function (isRemote = false) {
     const result = originalExecuteShot.call(this, isRemote);
-
-    // The displayed aim is the authoritative initial cue-ball heading.
-    // The core engine historically applied a small squirt offset here, which
-    // could make a straight-looking shot visibly leave at the wrong angle.
-    // Preserve the spin state, but normalize the initial velocity direction.
     const cue = this.balls?.find((b: any) => b.number === 0);
     if (cue && !cue.isPotted) {
       const speed = Math.hypot(cue.vel?.x || 0, cue.vel?.z || 0);
@@ -112,7 +107,6 @@ if (!proto.__kenyanPoolBallSyncPatched) {
       const current = this.players?.[this.currentPlayerIndex];
       const cue = this.balls?.find((b: any) => b.number === 0);
       if (current && cue && this.ballInHand) {
-        // Never replace the local placement with the previous rack position.
         return originalSyncBalls.call(this, serverBalls.filter((b: any) => b.number !== 0));
       }
     }
@@ -121,8 +115,6 @@ if (!proto.__kenyanPoolBallSyncPatched) {
   proto.__kenyanPoolBallSyncPatched = true;
 }
 
-// Refresh-rate-independent rolling. Rotation is distance travelled divided by
-// ball radius, so 60/90/120-Hz devices show the same physical roll rate.
 if (!proto.__kenyanPoolVisualPhysicsPatched) {
   proto.syncBallMeshes = function () {
     const now = performance.now();
@@ -138,7 +130,6 @@ if (!proto.__kenyanPoolVisualPhysicsPatched) {
         mesh.visible = false;
         continue;
       }
-
       mesh.visible = true;
       mesh.position.set(b.pos.x, radius, b.pos.z);
       const speed = Math.hypot(b.vel.x, b.vel.z);
@@ -162,9 +153,6 @@ if (typeof document !== 'undefined' && !document.getElementById('kenyan-pool-run
   style.id = 'kenyan-pool-runtime-style';
   style.textContent = `
     .mobile-power-wrap { touch-action: none; }
-
-    /* In landscape only the HUD is allowed to use the full viewport. The
-       Three.js table remains in its portrait canvas and is never rotated. */
     @media (orientation: landscape) and (max-width: 900px) {
       #main-canvas {
         width: min(75vh, 100vw) !important;
