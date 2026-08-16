@@ -1,0 +1,68 @@
+name: E2E Browser Smoke
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-smoke:
+    name: Browser smoke - desktop and mobile
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.4
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build game client
+        run: pnpm --filter @workspace/killer-pool run build
+
+      - name: Install Chromium
+        run: npx --yes playwright@latest install --with-deps chromium
+
+      - name: Start preview server
+        run: |
+          pnpm --filter @workspace/killer-pool run serve > /tmp/killer-pool-vite.log 2>&1 &
+          echo $! > /tmp/killer-pool-vite.pid
+          for i in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/killer-pool-vite.log
+          exit 1
+
+      - name: Desktop browser smoke
+        run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='1440,900' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/desktop.png
+
+      - name: Mobile portrait smoke
+        run: npx --yes playwright@latest screenshot --browser=chromium --device='iPhone 13' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/mobile-portrait.png
+
+      - name: Mobile landscape smoke
+        run: npx --yes playwright@latest screenshot --browser=chromium --viewport-size='844,390' --wait-for-timeout=2000 http://127.0.0.1:4173/ /tmp/mobile-landscape.png
+
+      - name: Upload browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke-screenshots
+          path: /tmp/*.png
+          if-no-files-found: ignore
