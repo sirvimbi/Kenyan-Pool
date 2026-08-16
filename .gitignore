@@ -47,3 +47,5 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+service-account.json
+artifacts/killer-pool/.env
