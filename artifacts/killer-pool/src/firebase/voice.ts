@@ -17,6 +17,29 @@ const PEERS_PATH = "voice_peers";
 interface PeerConnection {
   pc: RTCPeerConnection;
   audio: HTMLAudioElement;
+  unsubscribers: (() => void)[];
+}
+
+function pairKey(a: string, b: string) {
+  return [a, b].sort().join("__");
+}
+
+function iceServers(): RTCIceServer[] {
+  const servers: RTCIceServer[] = [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ];
+
+  // Optional TURN configuration. TURN is important for users behind symmetric
+  // NAT/firewalls; credentials stay in runtime environment variables and are
+  // never hard-coded into the repository.
+  const turnUrl = (import.meta as any).env?.VITE_TURN_URL as string | undefined;
+  const turnUsername = (import.meta as any).env?.VITE_TURN_USERNAME as string | undefined;
+  const turnCredential = (import.meta as any).env?.VITE_TURN_CREDENTIAL as string | undefined;
+  if (turnUrl && turnUsername && turnCredential) {
+    servers.push({ urls: turnUrl, username: turnUsername, credential: turnCredential });
+  }
+  return servers;
 }
 
 export class VoiceManager {
@@ -28,17 +51,16 @@ export class VoiceManager {
   private userId: string | null = null;
   private isPrimed = false;
 
-  constructor() {}
-
   async startLocalStream() {
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          channelCount: 1,
         },
-        video: false
+        video: false,
       });
       return this.localStream;
     } catch (err) {
@@ -53,16 +75,14 @@ export class VoiceManager {
       const AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
       if (AudioContext) {
         const ctx = new AudioContext();
-        if (ctx.state === 'suspended') await ctx.resume();
-        // Play a silent oscillator to fully unlock the audio system
+        if (ctx.state === "suspended") await ctx.resume();
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         gain.gain.value = 0;
         osc.connect(gain);
         gain.connect(ctx.destination);
         osc.start();
-        osc.stop(ctx.currentTime + 0.1);
-        console.log("Voice: Audio system primed for mobile");
+        osc.stop(ctx.currentTime + 0.05);
       }
       this.isPrimed = true;
     } catch (e) {
@@ -72,162 +92,163 @@ export class VoiceManager {
 
   setVolume(vol: number) {
     this.volume = Math.max(0, Math.min(1, vol / 100));
-    this.peers.forEach(p => {
-      p.audio.volume = this.volume;
-    });
+    this.peers.forEach((p) => { p.audio.volume = this.volume; });
   }
 
   async joinRoom(roomId: string, userId: string) {
     if (!isFirebaseConfigured || !this.localStream) return;
+    await this.stop();
+
     this.roomId = roomId;
     this.userId = userId;
     const db = getRtdb();
-
-    console.log(`Voice: Joining room ${roomId} as ${userId}`);
-
     const presenceRef = ref(db, `${PEERS_PATH}/${roomId}/presence/${userId}`);
-    await set(presenceRef, { joinedAt: serverTimestamp() });
+
+    // Queue disconnect handling before advertising presence, preventing a
+    // connection race during mobile/network transitions.
+    await presenceRef.onDisconnect().update({ online: false, leftAt: serverTimestamp() }).catch(() => {});
+    await set(presenceRef, { online: true, joinedAt: serverTimestamp() });
 
     const allPresenceRef = ref(db, `${PEERS_PATH}/${roomId}/presence`);
     const onPresence = onValue(allPresenceRef, (snap) => {
       const data = snap.val() || {};
-      Object.keys(data).forEach(peerId => {
-        if (peerId !== userId && !this.peers.has(peerId)) {
-          if (userId < peerId) {
-            this.setupPeer(peerId, true);
-          }
-        }
+      Object.keys(data).forEach((peerId) => {
+        if (peerId === userId || !data[peerId]?.online || this.peers.has(peerId)) return;
+        // The lexicographically smaller UID is the stable offerer. Both sides
+        // therefore make the same role decision without another server lock.
+        this.setupPeer(peerId, userId < peerId).catch((err) => {
+          console.warn("Voice: peer setup failed", peerId, err);
+        });
       });
     });
-    this.unsubscribers.push(() => off(allPresenceRef, 'value', onPresence));
-
-    const mySignalsRef = ref(db, `${PEERS_PATH}/${roomId}/signals/${userId}`);
-    const onIncomingSignal = onChildAdded(mySignalsRef, (snap) => {
-      const fromId = snap.key;
-      const signalData = snap.val();
-      if (fromId && signalData.offer && !this.peers.has(fromId)) {
-        this.setupPeer(fromId, false, signalData.offer);
-      }
-    });
-    this.unsubscribers.push(() => off(mySignalsRef, 'child_added', onIncomingSignal));
+    this.unsubscribers.push(() => off(allPresenceRef, "value", onPresence));
   }
 
-  private async setupPeer(peerId: string, isOfferer: boolean, remoteOffer?: any) {
-    if (this.peers.has(peerId)) return;
-    console.log(`Voice: Connecting to ${peerId} (Offerer: ${isOfferer})`);
-
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-        { urls: "stun:stun2.l.google.com:19302" },
-        { urls: "stun:stun3.l.google.com:19302" },
-        { urls: "stun:stun4.l.google.com:19302" },
-      ],
-    });
-
-    const audio = new Audio();
+  private async setupPeer(peerId: string, isOfferer: boolean) {
+    if (!this.roomId || !this.userId || this.peers.has(peerId)) return;
+    const db = getRtdb();
+    const pair = pairKey(this.userId, peerId);
+    const signalRef = ref(db, `${PEERS_PATH}/${this.roomId}/signals/${pair}`);
+    const peerEntry: PeerConnection = {
+      pc: new RTCPeerConnection({
+        iceServers: iceServers(),
+        bundlePolicy: "max-bundle",
+        rtcpMuxPolicy: "require",
+        iceCandidatePoolSize: 4,
+      }),
+      audio: new Audio(),
+      unsubscribers: [],
+    };
+    const pc = peerEntry.pc;
+    const audio = peerEntry.audio;
     audio.autoplay = true;
+    audio.playsInline = true;
     audio.volume = this.volume;
-    audio.style.display = 'none';
+    audio.style.display = "none";
     document.body.appendChild(audio);
+    this.peers.set(peerId, peerEntry);
 
-    this.peers.set(peerId, { pc, audio });
-
-    this.localStream?.getTracks().forEach(track => {
-      pc.addTrack(track, this.localStream!);
-    });
+    this.localStream?.getTracks().forEach((track) => pc.addTrack(track, this.localStream!));
 
     pc.ontrack = (event) => {
-      console.log(`Voice: Received track from ${peerId}`);
-      if (audio.srcObject !== event.streams[0]) {
-        audio.srcObject = event.streams[0];
-        audio.play().catch(e => {
-          console.warn("Voice: Autoplay prevented, adding fallback tap listener", e);
-          const fix = () => {
-            audio.play().then(() => {
-              console.log("Voice: Audio fixed via tap");
-              document.removeEventListener('click', fix);
-            }).catch(() => {});
-          };
-          document.addEventListener('click', fix);
-        });
-      }
+      const stream = event.streams[0];
+      if (!stream) return;
+      audio.srcObject = stream;
+      audio.play().catch(() => {
+        const resume = () => {
+          audio.play().catch(() => {});
+          document.removeEventListener("pointerdown", resume);
+          document.removeEventListener("touchstart", resume);
+        };
+        document.addEventListener("pointerdown", resume, { once: true, passive: true });
+        document.addEventListener("touchstart", resume, { once: true, passive: true });
+      });
     };
-
-    const db = getRtdb();
-    const signalPath = isOfferer
-      ? `${PEERS_PATH}/${this.roomId}/signals/${peerId}/${this.userId}`
-      : `${PEERS_PATH}/${this.roomId}/signals/${this.userId}/${peerId}`;
-    const signalRef = ref(db, signalPath);
 
     pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        const candidatesRef = child(signalRef, `candidates/${this.userId}`);
-        push(candidatesRef, event.candidate.toJSON());
+      if (!event.candidate || !this.userId) return;
+      const candidatesRef = child(signalRef, `candidates/${this.userId}`);
+      push(candidatesRef, event.candidate.toJSON()).catch(() => {});
+    };
+
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState;
+      if (state === "failed" || state === "closed") {
+        this.closePeer(peerId);
       }
     };
 
-    if (isOfferer) {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      await update(signalRef, { offer: { type: offer.type, sdp: offer.sdp } });
-
-      const answerRef = child(signalRef, 'answer');
-      const onAnswer = onValue(answerRef, async (snap) => {
-        const answer = snap.val();
-        if (answer && !pc.currentRemoteDescription) {
-          console.log(`Voice: Received answer from ${peerId}`);
-          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    // Each peer watches the shared pair record. This fixes the old signaling
+    // path mismatch where the callee wrote the answer under a path the offerer
+    // was not listening to.
+    const signalListener = onValue(signalRef, async (snap) => {
+      const signal = snap.val() || {};
+      try {
+        if (!isOfferer && signal.offer && !pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await update(signalRef, {
+            answer: { type: answer.type, sdp: answer.sdp },
+            updatedAt: serverTimestamp(),
+          });
+        } else if (isOfferer && signal.answer && !pc.currentRemoteDescription) {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
         }
-      });
-      this.unsubscribers.push(() => off(answerRef, 'value', onAnswer));
-    } else {
-      console.log(`Voice: Processing offer from ${peerId}`);
-      await pc.setRemoteDescription(new RTCSessionDescription(remoteOffer));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await update(signalRef, { answer: { type: answer.type, sdp: answer.sdp } });
-    }
+      } catch (err) {
+        console.warn("Voice: signaling negotiation failed", err);
+      }
+    });
+    peerEntry.unsubscribers.push(() => off(signalRef, "value", signalListener));
 
-    const peerCandidatesRef = child(signalRef, `candidates/${peerId}`);
-    const onPeerCandidate = onChildAdded(peerCandidatesRef, (snap) => {
+    const remoteCandidatesRef = child(signalRef, `candidates/${peerId}`);
+    const candidateListener = onChildAdded(remoteCandidatesRef, (snap) => {
       const candidate = snap.val();
-      if (candidate) {
+      if (candidate && pc.remoteDescription) {
         pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
       }
     });
-    this.unsubscribers.push(() => off(peerCandidatesRef, 'child_added', onPeerCandidate));
+    peerEntry.unsubscribers.push(() => off(remoteCandidatesRef, "child_added", candidateListener));
+
+    if (isOfferer) {
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      await pc.setLocalDescription(offer);
+      await update(signalRef, {
+        offer: { type: offer.type, sdp: offer.sdp },
+        answer: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
+
+  private closePeer(peerId: string) {
+    const entry = this.peers.get(peerId);
+    if (!entry) return;
+    entry.unsubscribers.forEach((u) => u());
+    entry.pc.close();
+    entry.audio.pause();
+    entry.audio.srcObject = null;
+    entry.audio.remove();
+    this.peers.delete(peerId);
   }
 
   async stop(roomId?: string, userId?: string) {
     const rid = roomId || this.roomId;
     const uid = userId || this.userId;
-
-    console.log(`Voice: Stopping session for ${uid}`);
-
-    if (rid && uid) {
+    if (rid && uid && isFirebaseConfigured) {
       const db = getRtdb();
-      try {
-        await remove(ref(db, `${PEERS_PATH}/${rid}/presence/${uid}`));
-        await remove(ref(db, `${PEERS_PATH}/${rid}/signals/${uid}`));
-      } catch (e) {}
+      await remove(ref(db, `${PEERS_PATH}/${rid}/presence/${uid}`)).catch(() => {});
+      await remove(ref(db, `${PEERS_PATH}/${rid}/signals/${pairKey(uid, uid)}`)).catch(() => {});
     }
 
-    this.peers.forEach(p => {
-      p.pc.close();
-      p.audio.pause();
-      p.audio.srcObject = null;
-      p.audio.remove();
-    });
-    this.peers.clear();
-
+    this.peers.forEach((_, peerId) => this.closePeer(peerId));
+    this.unsubscribers.forEach((u) => u());
+    this.unsubscribers = [];
     if (this.localStream) {
-      this.localStream.getTracks().forEach(t => t.stop());
+      this.localStream.getTracks().forEach((t) => t.stop());
       this.localStream = null;
     }
-
-    this.unsubscribers.forEach(u => u());
-    this.unsubscribers = [];
+    this.roomId = null;
+    this.userId = null;
   }
 }
