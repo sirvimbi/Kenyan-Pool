@@ -57,10 +57,8 @@ jobs:
           fi
           firebase projects:list --non-interactive >/dev/null
 
-      - name: Deploy Hosting
-        env:
-          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: firebase deploy --project "$FIREBASE_PROJECT_ID" --only hosting --non-interactive
+      - name: Deploy Hosting (skip functions)
+  run: firebase deploy --project kenyan-pool --only hosting --non-interactive
 
       - name: Deploy Functions
         env:
