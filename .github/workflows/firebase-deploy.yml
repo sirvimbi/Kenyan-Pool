@@ -57,7 +57,7 @@ jobs:
           fi
           firebase projects:list --non-interactive >/dev/null
 
-      - name: Deploy Hosting (skip functions)
+      - name: Deploy Hosting
   run: firebase deploy --project kenyan-pool --only hosting --non-interactive
 
       - name: Deploy Functions
