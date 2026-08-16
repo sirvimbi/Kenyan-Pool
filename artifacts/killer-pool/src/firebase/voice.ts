@@ -98,7 +98,10 @@ export class VoiceManager {
     const ctx = this.audioContext;
     this.peers.forEach(peer => {
       peer.audio.volume = this.volume;
-      if (peer.gain && ctx) peer.gain.gain.setTargetAtTime(this.volume, ctx.currentTime, 0.01);
+      if (peer.gain && ctx) {
+        const audioContext = ctx;
+        peer.gain.gain.setTargetAtTime(this.volume, audioContext.currentTime, 0.01);
+      }
     });
   }
 
@@ -165,12 +168,17 @@ export class VoiceManager {
       const stream = event.streams?.[0] || new MediaStream([event.track]);
       audio.srcObject = stream;
       const ctx = await this.ensureAudioContext();
-      if (ctx && !entry.source) {
+      if (!ctx) {
+        audio.play().catch(() => {});
+        return;
+      }
+      const audioContext = ctx;
+      if (!entry.source) {
         try {
-          entry.source = ctx.createMediaStreamSource(stream);
-          entry.gain = ctx.createGain();
+          entry.source = audioContext.createMediaStreamSource(stream);
+          entry.gain = audioContext.createGain();
           entry.gain.gain.value = this.volume;
-          entry.source.connect(entry.gain).connect(ctx.destination);
+          entry.source.connect(entry.gain).connect(audioContext.destination);
         } catch (err) {
           console.warn('Voice: WebAudio routing failed; using HTMLAudio fallback', err);
         }
