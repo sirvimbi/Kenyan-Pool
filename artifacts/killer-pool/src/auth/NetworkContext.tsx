@@ -1,8 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
-import {
-  ref, onValue, set, push, runTransaction, update, off, serverTimestamp,
-  remove, onDisconnect, DataSnapshot
-} from 'firebase/database';
+import { ref, onValue, set, push, runTransaction, update, off, serverTimestamp, remove, onDisconnect } from 'firebase/database';
 import { getRtdb, isFirebaseConfigured } from '../firebase/config';
 import { HUDState, BallState, Vec2 } from '@workspace/game-core';
 import { useAuth } from './AuthContext';
@@ -162,11 +159,12 @@ export function NetworkProvider({ children }: { children: React.ReactNode }) {
     publishedTurnKeyRef.current = turnKey;
     const seq = ++snapshotSeqRef.current;
     const snapshot: RoomSnapshot = { state, balls: nextBalls || [], seq, hostUid: user.uid, updatedAt: Date.now() };
-    update(ref(db, `rooms/${roomId}`), {
+    const payload: Record<string, any> = {
       state, balls: nextBalls || [], snapshot,
-      activeAim: clearAim ? null : undefined,
       hostUid: user.uid, hostHeartbeatAt: serverTimestamp(), updatedAt: serverTimestamp()
-    }).catch(err => console.warn('Network: authoritative snapshot failed', err));
+    };
+    if (clearAim) payload.activeAim = null;
+    update(ref(db, `rooms/${roomId}`), payload).catch(err => console.warn('Network: authoritative snapshot failed', err));
   }, [roomId, user?.uid]);
 
   const sendMove = useCallback((aimAngle: number, power: number, spin: Vec2 & { pos?: Vec2 }) => {
