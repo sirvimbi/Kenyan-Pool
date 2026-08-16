@@ -2,21 +2,31 @@ name: Deploy to Firebase
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      deploy_functions:
+        description: Deploy Firebase Functions as well as Hosting
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: firebase-deploy-main
+  group: firebase-production
   cancel-in-progress: false
+
+env:
+  FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
 
 jobs:
   deploy:
     name: Build and deploy to Firebase
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -50,5 +60,20 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Deploy Firebase Hosting and Functions
-        run: firebase deploy --project "${{ secrets.FIREBASE_PROJECT_ID }}" --only hosting,functions --non-interactive
+      - name: Verify Firebase authentication and project
+        run: |
+          test -n "$FIREBASE_PROJECT_ID" || { echo 'FIREBASE_PROJECT_ID secret is not configured'; exit 1; }
+          test -n "$GOOGLE_APPLICATION_CREDENTIALS" || { echo 'Google credentials were not created'; exit 1; }
+          test -s "$GOOGLE_APPLICATION_CREDENTIALS" || { echo 'Google credentials file is empty'; exit 1; }
+          firebase projects:list --non-interactive >/dev/null
+          firebase use "$FIREBASE_PROJECT_ID" --non-interactive
+
+      - name: Deploy Firebase Hosting
+        run: firebase deploy --project "$FIREBASE_PROJECT_ID" --only hosting --non-interactive
+
+      - name: Deploy Firebase Functions
+        if: ${{ github.event_name == 'push' || inputs.deploy_functions == true }}
+        run: firebase deploy --project "$FIREBASE_PROJECT_ID" --only functions --non-interactive
+
+      - name: Print production URL
+        run: echo "Firebase Hosting: https://${FIREBASE_PROJECT_ID}.web.app"
